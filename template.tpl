@@ -237,7 +237,7 @@ function firestoreChecker() {
         logToConsole(
           JSON.stringify({
             Name: 'DuplicateTransactionChecker',
-            Type: 'Other',
+            Type: 'Message',
             TraceId: traceId,
             EventName: 'Error',
             Message: 'Error writing to Firestore',
@@ -281,7 +281,7 @@ function generateDocumentKey() {
       logToConsole(
         JSON.stringify({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Other',
+          Type: 'Message',
           TraceId: traceId,
           EventName: 'Error',
           Message: 'Transaction id is empty',
