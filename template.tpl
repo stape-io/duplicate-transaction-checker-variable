@@ -36,7 +36,7 @@ ___TEMPLATE_PARAMETERS___
       }
     ],
     "simpleValueType": true,
-    "help": "Value that will be used as transaction ID"
+    "help": "Insert transaction ID variable or it will look for \"transaction_id\" in event data."
   },
   {
     "type": "CHECKBOX",
