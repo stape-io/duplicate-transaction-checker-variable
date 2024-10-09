@@ -31,13 +31,12 @@ ___TEMPLATE_PARAMETERS___
     "macrosInSelect": true,
     "selectItems": [
       {
-        "value": "transaction_id",
+        "value": "",
         "displayValue": "Event Data -\u003e transaction_id"
       }
     ],
     "simpleValueType": true,
-    "defaultValue": "transaction_id",
-    "help": "Value that will be used as transaction ID"
+    "help": "Insert transaction ID variable or it will look for \"transaction_id\" in event data."
   },
   {
     "type": "CHECKBOX",
@@ -126,7 +125,7 @@ const getContainerVersion = require('getContainerVersion');
 
 const isLoggingEnabled = determinateIsLoggingEnabled();
 const traceId = isLoggingEnabled ? getRequestHeader('trace-id') : undefined;
-
+const transaction_id = data.transactionId ? data.transactionId : getEventData('transaction_id');
 const documentKey = generateDocumentKey();
 
 if (!documentKey) {
@@ -157,29 +156,25 @@ function stapeChecker() {
   }
 
   return sendHttpRequest(url, {method: 'GET'})
-    .then((documents) => {
-      let body = documents.body;
-
-      return true;
-    }, () => {
-      const objectToStore = {u: true};
-
+    .then(function(documents) {
+      let responseStatusCode = documents.statusCode;
+      if(responseStatusCode == 200) {
       if (isLoggingEnabled) {
         logToConsole(
           JSON.stringify({
             Name: 'DuplicateTransactionChecker',
-            Type: 'Request',
+              Type: 'Response',
             TraceId: traceId,
-            EventName: 'DuplicateTransactionCheckerWrite',
-            RequestMethod: 'POST',
-            RequestUrl: url,
-            RequestBody: objectToStore,
-          })
-        );
+              EventName: 'DuplicateTransactionCheckerGet',
+              ResponseStatusCode: responseStatusCode,
+              ResponseHeaders: {},
+              ResponseBody: JSON.stringify(documents),
+          }));
       }
-
-      return sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify(objectToStore))
-        .then(() => {
+        return true;
+      } else if (responseStatusCode == 404) {
+        sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify({'transaction_id': transaction_id})
+          ).then(function(response) {
           if (isLoggingEnabled) {
             logToConsole(
               JSON.stringify({
@@ -187,31 +182,32 @@ function stapeChecker() {
                 Type: 'Response',
                 TraceId: traceId,
                 EventName: 'DuplicateTransactionCheckerWrite',
-                ResponseStatusCode: 200,
+                  ResponseStatusCode: responseStatusCode,
                 ResponseHeaders: {},
-                ResponseBody: {},
-              })
-            );
+                  ResponseBody: JSON.stringify(response),
+              }));
           }
-
+          }
+        );
           return false;
-        }, function () {
+        
+      } else {
           if (isLoggingEnabled) {
             logToConsole(
               JSON.stringify({
                 Name: 'DuplicateTransactionChecker',
-                Type: 'Response',
+              Type: 'Message',
                 TraceId: traceId,
-                EventName: 'DuplicateTransactionCheckerWrite',
-                ResponseStatusCode: 500,
+              EventName: 'Error',
+              ResponseStatusCode: responseStatusCode,
                 ResponseHeaders: {},
-                ResponseBody: {},
-              })
-            );
+              ResponseBody: JSON.stringify(documents),
+              Message: 'Error during request to Stape store'
           }
-
+          ));
+        }
           return undefined;
-        });
+      }
     });
 }
 
@@ -270,13 +266,8 @@ function getStapeUrl() {
 }
 
 function generateDocumentKey() {
-  let transactionId = data.transaction_id;
 
-  if (transactionId === 'transaction_id') {
-    transactionId = getEventData('transaction_id');
-  }
-
-  if (!transactionId) {
+  if (!transaction_id) {
     if (isLoggingEnabled) {
       logToConsole(
         JSON.stringify({
@@ -288,11 +279,10 @@ function generateDocumentKey() {
         })
       );
     }
-
     return false;
   }
 
-  return 'duplicate-' + makeString(transactionId);
+  return 'duplicate-' + makeString(transaction_id);
 }
 
 function determinateIsLoggingEnabled() {
