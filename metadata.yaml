@@ -1,4 +1,6 @@
 homepage: "https://stape.io/"
 versions:
+  - sha: b3218aef0cf86bb4bbfb51e503380bb3fbc4d13d
+    changeNotes: Fixed stape storage requests and variable retreiving.
   - sha: 1052100e3fcd0326a08f4bce5d34b55b02bc5412
     changeNotes: Initial release.
