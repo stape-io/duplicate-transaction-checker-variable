@@ -10,7 +10,7 @@ const getContainerVersion = require('getContainerVersion');
 
 const isLoggingEnabled = determinateIsLoggingEnabled();
 const traceId = isLoggingEnabled ? getRequestHeader('trace-id') : undefined;
-
+const transaction_id = data.transactionId ? data.transactionId : getEventData('transaction_id');
 const documentKey = generateDocumentKey();
 
 if (!documentKey) {
@@ -44,54 +44,54 @@ function stapeChecker() {
     .then(function(documents) {
       let responseStatusCode = documents.statusCode;
       if(responseStatusCode == 200) {
-        if (isLoggingEnabled) {
-          logToConsole(
-            JSON.stringify({
-              Name: 'DuplicateTransactionChecker',
+      if (isLoggingEnabled) {
+        logToConsole(
+          JSON.stringify({
+            Name: 'DuplicateTransactionChecker',
               Type: 'Response',
-              TraceId: traceId,
+            TraceId: traceId,
               EventName: 'DuplicateTransactionCheckerGet',
               ResponseStatusCode: responseStatusCode,
               ResponseHeaders: {},
               ResponseBody: JSON.stringify(documents),
           }));
-        }
+      }
         return true;
       } else if (responseStatusCode == 404) {
-        sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify({'transaction_id': data.transaction_id})
+        sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify({'transaction_id': transaction_id})
           ).then(function(response) {
-            if (isLoggingEnabled) {
-              logToConsole(
-                JSON.stringify({
-                  Name: 'DuplicateTransactionChecker',
-                  Type: 'Response',
-                  TraceId: traceId,
-                  EventName: 'DuplicateTransactionCheckerWrite',
+          if (isLoggingEnabled) {
+            logToConsole(
+              JSON.stringify({
+                Name: 'DuplicateTransactionChecker',
+                Type: 'Response',
+                TraceId: traceId,
+                EventName: 'DuplicateTransactionCheckerWrite',
                   ResponseStatusCode: responseStatusCode,
-                  ResponseHeaders: {},
+                ResponseHeaders: {},
                   ResponseBody: JSON.stringify(response),
               }));
-            }
+          }
           }
         );
-        return false;
+          return false;
         
       } else {
-        if (isLoggingEnabled) {
-          logToConsole(
-            JSON.stringify({
-              Name: 'DuplicateTransactionChecker',
+          if (isLoggingEnabled) {
+            logToConsole(
+              JSON.stringify({
+                Name: 'DuplicateTransactionChecker',
               Type: 'Message',
-              TraceId: traceId,
+                TraceId: traceId,
               EventName: 'Error',
               ResponseStatusCode: responseStatusCode,
-              ResponseHeaders: {},
+                ResponseHeaders: {},
               ResponseBody: JSON.stringify(documents),
               Message: 'Error during request to Stape store'
-            }
+          }
           ));
         }
-        return undefined;
+          return undefined;
       }
     });
 }
@@ -151,13 +151,8 @@ function getStapeUrl() {
 }
 
 function generateDocumentKey() {
-  let transactionId = data.transactionId;
 
-  if (!transactionId) {
-    transactionId = getEventData('transaction_id');
-  }
-
-  if (!transactionId) {
+  if (!transaction_id) {
     if (isLoggingEnabled) {
       logToConsole(
         JSON.stringify({
@@ -172,7 +167,7 @@ function generateDocumentKey() {
     return false;
   }
 
-  return 'duplicate-' + makeString(transactionId);
+  return 'duplicate-' + makeString(transaction_id);
 }
 
 function determinateIsLoggingEnabled() {

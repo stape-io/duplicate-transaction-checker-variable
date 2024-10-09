@@ -31,7 +31,7 @@ ___TEMPLATE_PARAMETERS___
     "macrosInSelect": true,
     "selectItems": [
       {
-        "value": "transaction_id",
+        "value": "",
         "displayValue": "Event Data -\u003e transaction_id"
       }
     ],
@@ -125,7 +125,7 @@ const getContainerVersion = require('getContainerVersion');
 
 const isLoggingEnabled = determinateIsLoggingEnabled();
 const traceId = isLoggingEnabled ? getRequestHeader('trace-id') : undefined;
-
+const transaction_id = data.transactionId ? data.transactionId : getEventData('transaction_id');
 const documentKey = generateDocumentKey();
 
 if (!documentKey) {
@@ -173,7 +173,7 @@ function stapeChecker() {
       }
         return true;
       } else if (responseStatusCode == 404) {
-        sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify({'transaction_id': data.transaction_id})
+        sendHttpRequest(url, {method: 'PUT', headers: { 'Content-Type': 'application/json' }}, JSON.stringify({'transaction_id': transaction_id})
           ).then(function(response) {
           if (isLoggingEnabled) {
             logToConsole(
@@ -266,13 +266,8 @@ function getStapeUrl() {
 }
 
 function generateDocumentKey() {
-  let transactionId = data.transactionId;
 
-  if (!transactionId) {
-    transactionId = getEventData('transaction_id');
-  }
-
-  if (!transactionId) {
+  if (!transaction_id) {
     if (isLoggingEnabled) {
       logToConsole(
         JSON.stringify({
@@ -287,7 +282,7 @@ function generateDocumentKey() {
     return false;
   }
 
-  return 'duplicate-' + makeString(transactionId);
+  return 'duplicate-' + makeString(transaction_id);
 }
 
 function determinateIsLoggingEnabled() {
