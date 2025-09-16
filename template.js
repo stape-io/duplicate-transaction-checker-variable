@@ -15,25 +15,41 @@ const BigQuery = require('BigQuery');
 
 const traceId = getRequestHeader('trace-id');
 
-const transaction_id = data.transactionId ? data.transactionId : getEventData('transaction_id');
-const documentKey = generateDocumentKey();
+const transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
+const documentId = generateDocumentId(transactionId);
 
-if (!documentKey) {
+if (!documentId) {
   return false;
 }
 
 if (data.stape) {
-  return stapeChecker();
+  return stapeChecker(data, documentId, transactionId);
 }
 
-return firestoreChecker();
+return firestoreChecker(data, documentId);
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
 
-function stapeChecker() {
-  let url = getStapeUrl();
+function generateDocumentId(transactionId) {
+  if (!transactionId) {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      TraceId: traceId,
+      EventName: 'Error',
+      Message: 'Transaction id is empty'
+    });
+
+    return false;
+  }
+
+  return 'duplicate-' + makeString(transactionId);
+}
+
+function stapeChecker(data, documentId, transactionId) {
+  const url = getStapeStoreDocumentUrl(data, documentId);
 
   log({
     Name: 'DuplicateTransactionChecker',
@@ -44,25 +60,41 @@ function stapeChecker() {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' }).then(function (documents) {
-    let responseStatusCode = documents.statusCode;
+  return sendHttpRequest(url, { method: 'GET' }).then(function (response) {
+    const responseStatusCode = response.statusCode;
+
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Response',
+      TraceId: traceId,
+      EventName: 'DuplicateTransactionCheckerGet',
+      ResponseStatusCode: responseStatusCode,
+      ResponseHeaders: {},
+      ResponseBody: response.body
+    });
+
     if (responseStatusCode == 200) {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Response',
-        TraceId: traceId,
-        EventName: 'DuplicateTransactionCheckerGet',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: JSON.stringify(documents)
-      });
       return true;
     } else if (responseStatusCode == 404) {
+      const body = { transaction_id: transactionId };
+
+      log({
+        Name: 'DuplicateTransactionChecker',
+        Type: 'Request',
+        TraceId: traceId,
+        EventName: 'DuplicateTransactionCheckerWrite',
+        RequestMethod: 'PUT',
+        RequestUrl: url,
+        RequestBody: body
+      });
+
       sendHttpRequest(
         url,
         { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-        JSON.stringify({ transaction_id: transaction_id })
+        JSON.stringify(body)
       ).then(function (response) {
+        const responseStatusCode = response.statusCode;
+
         log({
           Name: 'DuplicateTransactionChecker',
           Type: 'Response',
@@ -70,9 +102,10 @@ function stapeChecker() {
           EventName: 'DuplicateTransactionCheckerWrite',
           ResponseStatusCode: responseStatusCode,
           ResponseHeaders: {},
-          ResponseBody: JSON.stringify(response)
+          ResponseBody: response.body
         });
       });
+
       return false;
     } else {
       log({
@@ -82,17 +115,41 @@ function stapeChecker() {
         EventName: 'Error',
         ResponseStatusCode: responseStatusCode,
         ResponseHeaders: {},
-        ResponseBody: JSON.stringify(documents),
-        Message: 'Error during request to Stape store'
+        ResponseBody: response.body,
+        Message: 'Error during request to Stape Store'
       });
+
       return undefined;
     }
   });
 }
 
-function firestoreChecker() {
+function getStapeStoreBaseUrl(data) {
+  const containerIdentifier = getRequestHeader('x-gtm-identifier');
+  const defaultDomain = getRequestHeader('x-gtm-default-domain');
+  const containerApiKey = getRequestHeader('x-gtm-api-key');
+  const collectionPath = 'collections/' + enc(data.collectionName || 'default') + '/documents';
+
+  return (
+    'https://' +
+    enc(containerIdentifier) +
+    '.' +
+    enc(defaultDomain) +
+    '/stape-api/' +
+    enc(containerApiKey) +
+    '/v2/store/' +
+    collectionPath
+  );
+}
+
+function getStapeStoreDocumentUrl(data, documentId) {
+  const storeBaseUrl = getStapeStoreBaseUrl(data);
+  return storeBaseUrl + '/' + enc(documentId);
+}
+
+function firestoreChecker(data, documentId) {
   const projectId = data.firebaseProjectId;
-  const documentPath = data.firebasePath + '/' + documentKey;
+  const documentPath = data.firebasePath + '/' + documentId;
 
   return Firestore.read(documentPath, { projectId: projectId })
     .then(function (result) {
@@ -101,7 +158,7 @@ function firestoreChecker() {
       } else {
         return Firestore.write(documentPath, {
           projectId: projectId,
-          data: { transaction_id: documentKey }
+          data: { transaction_id: documentId }
         }).then(function () {
           return false;
         });
@@ -118,41 +175,6 @@ function firestoreChecker() {
 
       return undefined;
     });
-}
-
-function getStoreUrl() {
-  const containerIdentifier = getRequestHeader('x-gtm-identifier');
-  const defaultDomain = getRequestHeader('x-gtm-default-domain');
-  const containerApiKey = getRequestHeader('x-gtm-api-key');
-
-  return (
-    'https://' +
-    enc(containerIdentifier) +
-    '.' +
-    enc(defaultDomain) +
-    '/stape-api/' +
-    enc(containerApiKey) +
-    '/v1/store'
-  );
-}
-
-function getStapeUrl() {
-  return getStoreUrl() + '/' + enc(documentKey);
-}
-
-function generateDocumentKey() {
-  if (!transaction_id) {
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Message',
-      TraceId: traceId,
-      EventName: 'Error',
-      Message: 'Transaction id is empty'
-    });
-    return false;
-  }
-
-  return 'duplicate-' + makeString(transaction_id);
 }
 
 /*==============================================================================
