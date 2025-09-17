@@ -1,3 +1,5 @@
+/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
+
 const getEventData = require('getEventData');
 const makeString = require('makeString');
 const JSON = require('JSON');
@@ -8,6 +10,7 @@ const logToConsole = require('logToConsole');
 const getRequestHeader = require('getRequestHeader');
 const getContainerVersion = require('getContainerVersion');
 const getTimestampMillis = require('getTimestampMillis');
+const getType = require('getType');
 const BigQuery = require('BigQuery');
 
 /*==============================================================================
@@ -125,11 +128,28 @@ function stapeChecker(data, documentId, transactionId) {
 }
 
 function getStapeStoreBaseUrl(data) {
-  const containerIdentifier = getRequestHeader('x-gtm-identifier');
-  const defaultDomain = getRequestHeader('x-gtm-default-domain');
-  const containerApiKey = getRequestHeader('x-gtm-api-key');
+  let containerIdentifier;
+  let defaultDomain;
+  let containerApiKey;
   const collectionPath =
     'collections/' + enc(data.stapeStoreCollectionName || 'default') + '/documents';
+
+  const shouldUseDifferentStore =
+    isUIFieldTrue(data.useDifferentStapeStore) &&
+    getType(data.stapeStoreContainerApiKey) === 'string';
+  if (shouldUseDifferentStore) {
+    const containerApiKeyParts = data.stapeStoreContainerApiKey.split(':');
+
+    const containerLocation = containerApiKeyParts[0];
+    const containerRegion = containerApiKeyParts[3] || 'io';
+    containerIdentifier = containerApiKeyParts[1];
+    defaultDomain = containerLocation + '.stape.' + containerRegion;
+    containerApiKey = containerApiKeyParts[2];
+  } else {
+    containerIdentifier = getRequestHeader('x-gtm-identifier');
+    defaultDomain = getRequestHeader('x-gtm-default-domain');
+    containerApiKey = getRequestHeader('x-gtm-api-key');
+  }
 
   return (
     'https://' +
@@ -181,6 +201,10 @@ function firestoreChecker(data, documentId) {
 /*==============================================================================
   Helpers
 ==============================================================================*/
+
+function isUIFieldTrue(field) {
+  return [true, 'true', 1, '1'].indexOf(field) !== -1;
+}
 
 function enc(data) {
   return encodeUriComponent(makeString(data || ''));
