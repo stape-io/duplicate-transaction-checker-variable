@@ -14,6 +14,7 @@ ___INFO___
   "version": 1,
   "securityGroups": [],
   "displayName": "Duplicate Transaction Checker",
+  "categories": ["UTILITY", "DATA_WAREHOUSING"],
   "description": "Verify if the current transaction ID has been previously recorded. Utilize a database to store and manage transaction IDs.",
   "containerContexts": [
     "SERVER"
@@ -101,11 +102,11 @@ ___TEMPLATE_PARAMETERS___
         "selectItems": [
           {
             "value": true,
-            "displayValue": "True"
+            "displayValue": "true"
           },
           {
             "value": false,
-            "displayValue": "False"
+            "displayValue": "false"
           }
         ],
         "simpleValueType": true,
@@ -260,8 +261,6 @@ const BigQuery = require('BigQuery');
 /*==============================================================================
 ==============================================================================*/
 
-const traceId = getRequestHeader('trace-id');
-
 const transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
 const documentId = generateDocumentId(transactionId);
 
@@ -284,7 +283,6 @@ function generateDocumentId(transactionId) {
     log({
       Name: 'DuplicateTransactionChecker',
       Type: 'Message',
-      TraceId: traceId,
       EventName: 'Error',
       Message: 'Transaction id is empty'
     });
@@ -301,7 +299,6 @@ function stapeChecker(data, documentId, transactionId) {
   log({
     Name: 'DuplicateTransactionChecker',
     Type: 'Request',
-    TraceId: traceId,
     EventName: 'DuplicateTransactionCheckerGet',
     RequestMethod: 'GET',
     RequestUrl: url
@@ -313,7 +310,6 @@ function stapeChecker(data, documentId, transactionId) {
     log({
       Name: 'DuplicateTransactionChecker',
       Type: 'Response',
-      TraceId: traceId,
       EventName: 'DuplicateTransactionCheckerGet',
       ResponseStatusCode: responseStatusCode,
       ResponseHeaders: {},
@@ -328,7 +324,6 @@ function stapeChecker(data, documentId, transactionId) {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Request',
-        TraceId: traceId,
         EventName: 'DuplicateTransactionCheckerWrite',
         RequestMethod: 'PUT',
         RequestUrl: url,
@@ -345,7 +340,6 @@ function stapeChecker(data, documentId, transactionId) {
         log({
           Name: 'DuplicateTransactionChecker',
           Type: 'Response',
-          TraceId: traceId,
           EventName: 'DuplicateTransactionCheckerWrite',
           ResponseStatusCode: responseStatusCode,
           ResponseHeaders: {},
@@ -358,7 +352,6 @@ function stapeChecker(data, documentId, transactionId) {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
-        TraceId: traceId,
         EventName: 'Error',
         ResponseStatusCode: responseStatusCode,
         ResponseHeaders: {},
@@ -433,7 +426,6 @@ function firestoreChecker(data, documentId) {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
-        TraceId: traceId,
         EventName: 'Error',
         Message: 'Error writing to Firestore'
       });
@@ -458,6 +450,8 @@ function log(rawDataToLog) {
   const logDestinationsHandlers = {};
   if (determinateIsLoggingEnabled()) logDestinationsHandlers.console = logConsole;
   if (determinateIsLoggingEnabledForBigQuery()) logDestinationsHandlers.bigQuery = logToBigQuery;
+
+  rawDataToLog.TraceId = getRequestHeader('trace-id');
 
   const keyMappings = {
     // No transformation for Console is needed.
@@ -872,5 +866,4 @@ scenarios: []
 ___NOTES___
 
 Created on 7/23/2024, 1:55:47 PM
-
 
