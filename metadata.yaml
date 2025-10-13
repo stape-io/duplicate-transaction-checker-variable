@@ -1,5 +1,8 @@
-homepage: "https://stape.io/"
+homepage: 'https://stape.io/'
+documentation: 'https://github.com/stape-io/duplicate-transaction-checker-variable'
 versions:
+  - sha: 8e40bcc10bf487a80650a7b457893bcfc2eb895a
+    changeNotes: Added Stape Store 2.0 support. Added BigQuery logging support.
   - sha: b3218aef0cf86bb4bbfb51e503380bb3fbc4d13d
     changeNotes: Fixed stape storage requests and variable retreiving.
   - sha: 1052100e3fcd0326a08f4bce5d34b55b02bc5412
