@@ -14,7 +14,10 @@ ___INFO___
   "version": 1,
   "securityGroups": [],
   "displayName": "Duplicate Transaction Checker",
-  "categories": ["UTILITY", "DATA_WAREHOUSING"],
+  "categories": [
+    "UTILITY",
+    "DATA_WAREHOUSING"
+  ],
   "description": "Verify if the current transaction ID has been previously recorded. Utilize a database to store and manage transaction IDs.",
   "containerContexts": [
     "SERVER"
@@ -92,7 +95,8 @@ ___TEMPLATE_PARAMETERS___
         "name": "stapeStoreCollectionName",
         "displayName": "Stape Store Collection Name",
         "simpleValueType": true,
-        "help": "The name of the collection on the Stape Store that contains (or will contain) the document with the data.\n\u003cbr/\u003e\u003cbr/\u003e\nIf not set, the \u003ci\u003edefault\u003c/i\u003e Collection Name will be used."
+        "help": "The name of the collection on the Stape Store that contains (or will contain) the document with the data.\n\u003cbr/\u003e\u003cbr/\u003e\nIf not set, the \u003ci\u003edefault\u003c/i\u003e Collection Name will be used.",
+        "defaultValue": "default"
       },
       {
         "type": "SELECT",
