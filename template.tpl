@@ -40,7 +40,7 @@ ___TEMPLATE_PARAMETERS___
       }
     ],
     "simpleValueType": true,
-    "help": "Insert transaction ID variable or it will look for \"transaction_id\" in event data."
+    "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\nNote: When using Stape.io for storage, any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape API requirements."
   },
   {
     "type": "CHECKBOX",
@@ -249,51 +249,52 @@ ___SANDBOXED_JS_FOR_SERVER___
 
 /// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
-const getEventData = require('getEventData');
-const makeString = require('makeString');
-const JSON = require('JSON');
-const Firestore = require('Firestore');
-const sendHttpRequest = require('sendHttpRequest');
+const BigQuery = require('BigQuery');
+const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
-const logToConsole = require('logToConsole');
-const getRequestHeader = require('getRequestHeader');
+const Firestore = require('Firestore');
 const getContainerVersion = require('getContainerVersion');
+const getEventData = require('getEventData');
+const getRequestHeader = require('getRequestHeader');
 const getTimestampMillis = require('getTimestampMillis');
 const getType = require('getType');
-const BigQuery = require('BigQuery');
+const JSON = require('JSON');
+const logToConsole = require('logToConsole');
+const makeString = require('makeString');
+const sendHttpRequest = require('sendHttpRequest');
 
 /*==============================================================================
 ==============================================================================*/
 
-const transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
-const documentId = generateDocumentId(transactionId);
+let transactionId = data.transactionId || getEventData('transaction_id');
+if (data.stape && transactionId) {
+  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+}
 
-if (!documentId) {
+if (!transactionId) {
+  log({
+    Name: 'DuplicateTransactionChecker',
+    Type: 'Message',
+    EventName: 'Error',
+    Message: 'Transaction id is empty'
+  });
+
   return false;
 }
 
+const documentId = generateDocumentId(transactionId);
+
 if (data.stape) {
   return stapeChecker(data, documentId, transactionId);
+} else {
+  return firestoreChecker(data, documentId);
 }
-
-return firestoreChecker(data, documentId);
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
 
 function generateDocumentId(transactionId) {
-  if (!transactionId) {
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Message',
-      EventName: 'Error',
-      Message: 'Transaction id is empty'
-    });
-
-    return false;
-  }
-
   return 'duplicate-' + makeString(transactionId);
 }
 
@@ -308,64 +309,75 @@ function stapeChecker(data, documentId, transactionId) {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' }).then(function (response) {
-    const responseStatusCode = response.statusCode;
-
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Response',
-      EventName: 'DuplicateTransactionCheckerGet',
-      ResponseStatusCode: responseStatusCode,
-      ResponseHeaders: {},
-      ResponseBody: response.body
-    });
-
-    if (responseStatusCode == 200) {
-      return true;
-    } else if (responseStatusCode == 404) {
-      const body = { transaction_id: transactionId };
+  return sendHttpRequest(url, { method: 'GET' })
+    .then(function (response) {
+      const responseStatusCode = response.statusCode;
 
       log({
         Name: 'DuplicateTransactionChecker',
-        Type: 'Request',
-        EventName: 'DuplicateTransactionCheckerWrite',
-        RequestMethod: 'PUT',
-        RequestUrl: url,
-        RequestBody: body
+        Type: 'Response',
+        EventName: 'DuplicateTransactionCheckerGet',
+        ResponseStatusCode: responseStatusCode,
+        ResponseHeaders: {},
+        ResponseBody: response.body
       });
 
-      sendHttpRequest(
-        url,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-        JSON.stringify(body)
-      ).then(function (response) {
-        const responseStatusCode = response.statusCode;
+      if (responseStatusCode === 200) {
+        return true;
+      } else if (responseStatusCode === 404) {
+        const body = { transaction_id: transactionId };
 
         log({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Response',
+          Type: 'Request',
           EventName: 'DuplicateTransactionCheckerWrite',
+          RequestMethod: 'PUT',
+          RequestUrl: url,
+          RequestBody: body
+        });
+
+        return sendHttpRequest(
+          url,
+          { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
+          JSON.stringify(body)
+        ).then(function (response) {
+          const responseStatusCode = response.statusCode;
+
+          log({
+            Name: 'DuplicateTransactionChecker',
+            Type: 'Response',
+            EventName: 'DuplicateTransactionCheckerWrite',
+            ResponseStatusCode: responseStatusCode,
+            ResponseHeaders: {},
+            ResponseBody: response.body
+          });
+
+          return false;
+        });
+      } else {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
           ResponseStatusCode: responseStatusCode,
           ResponseHeaders: {},
-          ResponseBody: response.body
+          ResponseBody: response.body,
+          Message: 'Error during request to Stape Store'
         });
-      });
 
-      return false;
-    } else {
+        return undefined;
+      }
+    })
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body,
         Message: 'Error during request to Stape Store'
       });
 
       return undefined;
-    }
-  });
+    });
 }
 
 function getStapeStoreBaseUrl(data) {
@@ -426,7 +438,7 @@ function firestoreChecker(data, documentId) {
         });
       }
     })
-    .catch(function (error) {
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
@@ -441,6 +453,12 @@ function firestoreChecker(data, documentId) {
 /*==============================================================================
   Helpers
 ==============================================================================*/
+
+function replaceAll(str, find, replace) {
+  if (getType(str) !== 'string') return str;
+  const regex = createRegex(find, 'g');
+  return str.replace(regex, replace);
+}
 
 function isUIFieldTrue(field) {
   return [true, 'true', 1, '1'].indexOf(field) !== -1;
@@ -870,4 +888,5 @@ scenarios: []
 ___NOTES___
 
 Created on 7/23/2024, 1:55:47 PM
+
 
