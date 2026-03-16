@@ -1,50 +1,49 @@
 /// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
-const getEventData = require('getEventData');
-const makeString = require('makeString');
-const JSON = require('JSON');
-const Firestore = require('Firestore');
-const sendHttpRequest = require('sendHttpRequest');
+const BigQuery = require('BigQuery');
+const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
-const logToConsole = require('logToConsole');
-const getRequestHeader = require('getRequestHeader');
+const Firestore = require('Firestore');
 const getContainerVersion = require('getContainerVersion');
+const getEventData = require('getEventData');
+const getRequestHeader = require('getRequestHeader');
 const getTimestampMillis = require('getTimestampMillis');
 const getType = require('getType');
-const BigQuery = require('BigQuery');
+const JSON = require('JSON');
+const logToConsole = require('logToConsole');
+const makeString = require('makeString');
+const sendHttpRequest = require('sendHttpRequest');
 
 /*==============================================================================
 ==============================================================================*/
 
-const transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
-const documentId = generateDocumentId(transactionId);
+let transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
 
-if (!documentId) {
+if (!transactionId) {
+  log({
+    Name: 'DuplicateTransactionChecker',
+    Type: 'Message',
+    EventName: 'Error',
+    Message: 'Transaction id is empty'
+  });
+
   return false;
 }
 
 if (data.stape) {
+  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+  const documentId = generateDocumentId(transactionId);
   return stapeChecker(data, documentId, transactionId);
+} else {
+  const documentId = generateDocumentId(transactionId);
+  return firestoreChecker(data, documentId);
 }
-
-return firestoreChecker(data, documentId);
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
 
 function generateDocumentId(transactionId) {
-  if (!transactionId) {
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Message',
-      EventName: 'Error',
-      Message: 'Transaction id is empty'
-    });
-
-    return false;
-  }
-
   return 'duplicate-' + makeString(transactionId);
 }
 
@@ -85,7 +84,7 @@ function stapeChecker(data, documentId, transactionId) {
         RequestBody: body
       });
 
-      sendHttpRequest(
+      return sendHttpRequest(
         url,
         { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
         JSON.stringify(body)
@@ -100,9 +99,9 @@ function stapeChecker(data, documentId, transactionId) {
           ResponseHeaders: {},
           ResponseBody: response.body
         });
-      });
 
-      return false;
+        return false;
+      });
     } else {
       log({
         Name: 'DuplicateTransactionChecker',
@@ -192,6 +191,12 @@ function firestoreChecker(data, documentId) {
 /*==============================================================================
   Helpers
 ==============================================================================*/
+
+function replaceAll(str, find, replace) {
+  if (getType(str) !== 'string') return str;
+  const regex = createRegex(find, 'g');
+  return str.replace(regex, replace);
+}
 
 function isUIFieldTrue(field) {
   return [true, 'true', 1, '1'].indexOf(field) !== -1;
