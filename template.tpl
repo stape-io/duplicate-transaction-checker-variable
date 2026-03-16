@@ -40,7 +40,7 @@ ___TEMPLATE_PARAMETERS___
       }
     ],
     "simpleValueType": true,
-    "help": "Insert transaction ID variable or it will look for \"transaction_id\" in event data."
+    "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\nNote: When using Stape.io for storage, any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape API requirements."
   },
   {
     "type": "CHECKBOX",
@@ -266,7 +266,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
+let transactionId = data.transactionId || getEventData('transaction_id');
+if (data.stape && transactionId) {
+  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+}
 
 if (!transactionId) {
   log({
@@ -279,12 +282,11 @@ if (!transactionId) {
   return false;
 }
 
+const documentId = generateDocumentId(transactionId);
+
 if (data.stape) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-  const documentId = generateDocumentId(transactionId);
   return stapeChecker(data, documentId, transactionId);
 } else {
-  const documentId = generateDocumentId(transactionId);
   return firestoreChecker(data, documentId);
 }
 
@@ -307,64 +309,75 @@ function stapeChecker(data, documentId, transactionId) {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' }).then(function (response) {
-    const responseStatusCode = response.statusCode;
-
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Response',
-      EventName: 'DuplicateTransactionCheckerGet',
-      ResponseStatusCode: responseStatusCode,
-      ResponseHeaders: {},
-      ResponseBody: response.body
-    });
-
-    if (responseStatusCode == 200) {
-      return true;
-    } else if (responseStatusCode == 404) {
-      const body = { transaction_id: transactionId };
+  return sendHttpRequest(url, { method: 'GET' })
+    .then(function (response) {
+      const responseStatusCode = response.statusCode;
 
       log({
         Name: 'DuplicateTransactionChecker',
-        Type: 'Request',
-        EventName: 'DuplicateTransactionCheckerWrite',
-        RequestMethod: 'PUT',
-        RequestUrl: url,
-        RequestBody: body
+        Type: 'Response',
+        EventName: 'DuplicateTransactionCheckerGet',
+        ResponseStatusCode: responseStatusCode,
+        ResponseHeaders: {},
+        ResponseBody: response.body
       });
 
-      return sendHttpRequest(
-        url,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-        JSON.stringify(body)
-      ).then(function (response) {
-        const responseStatusCode = response.statusCode;
+      if (responseStatusCode === 200) {
+        return true;
+      } else if (responseStatusCode === 404) {
+        const body = { transaction_id: transactionId };
 
         log({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Response',
+          Type: 'Request',
           EventName: 'DuplicateTransactionCheckerWrite',
-          ResponseStatusCode: responseStatusCode,
-          ResponseHeaders: {},
-          ResponseBody: response.body
+          RequestMethod: 'PUT',
+          RequestUrl: url,
+          RequestBody: body
         });
 
-        return false;
-      });
-    } else {
+        return sendHttpRequest(
+          url,
+          { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
+          JSON.stringify(body)
+        ).then(function (response) {
+          const responseStatusCode = response.statusCode;
+
+          log({
+            Name: 'DuplicateTransactionChecker',
+            Type: 'Response',
+            EventName: 'DuplicateTransactionCheckerWrite',
+            ResponseStatusCode: responseStatusCode,
+            ResponseHeaders: {},
+            ResponseBody: response.body
+          });
+
+          return false;
+        });
+      } else {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          ResponseStatusCode: responseStatusCode,
+          ResponseHeaders: {},
+          ResponseBody: response.body,
+          Message: 'Error during request to Stape Store'
+        });
+
+        return undefined;
+      }
+    })
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body,
         Message: 'Error during request to Stape Store'
       });
 
       return undefined;
-    }
-  });
+    });
 }
 
 function getStapeStoreBaseUrl(data) {
@@ -425,7 +438,7 @@ function firestoreChecker(data, documentId) {
         });
       }
     })
-    .catch(function (error) {
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',

@@ -17,7 +17,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId ? data.transactionId : getEventData('transaction_id');
+let transactionId = data.transactionId || getEventData('transaction_id');
+if (data.stape && transactionId) {
+  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+}
 
 if (!transactionId) {
   log({
@@ -30,12 +33,11 @@ if (!transactionId) {
   return false;
 }
 
+const documentId = generateDocumentId(transactionId);
+
 if (data.stape) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-  const documentId = generateDocumentId(transactionId);
   return stapeChecker(data, documentId, transactionId);
 } else {
-  const documentId = generateDocumentId(transactionId);
   return firestoreChecker(data, documentId);
 }
 
@@ -58,64 +60,75 @@ function stapeChecker(data, documentId, transactionId) {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' }).then(function (response) {
-    const responseStatusCode = response.statusCode;
-
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Response',
-      EventName: 'DuplicateTransactionCheckerGet',
-      ResponseStatusCode: responseStatusCode,
-      ResponseHeaders: {},
-      ResponseBody: response.body
-    });
-
-    if (responseStatusCode == 200) {
-      return true;
-    } else if (responseStatusCode == 404) {
-      const body = { transaction_id: transactionId };
+  return sendHttpRequest(url, { method: 'GET' })
+    .then(function (response) {
+      const responseStatusCode = response.statusCode;
 
       log({
         Name: 'DuplicateTransactionChecker',
-        Type: 'Request',
-        EventName: 'DuplicateTransactionCheckerWrite',
-        RequestMethod: 'PUT',
-        RequestUrl: url,
-        RequestBody: body
+        Type: 'Response',
+        EventName: 'DuplicateTransactionCheckerGet',
+        ResponseStatusCode: responseStatusCode,
+        ResponseHeaders: {},
+        ResponseBody: response.body
       });
 
-      return sendHttpRequest(
-        url,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-        JSON.stringify(body)
-      ).then(function (response) {
-        const responseStatusCode = response.statusCode;
+      if (responseStatusCode === 200) {
+        return true;
+      } else if (responseStatusCode === 404) {
+        const body = { transaction_id: transactionId };
 
         log({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Response',
+          Type: 'Request',
           EventName: 'DuplicateTransactionCheckerWrite',
-          ResponseStatusCode: responseStatusCode,
-          ResponseHeaders: {},
-          ResponseBody: response.body
+          RequestMethod: 'PUT',
+          RequestUrl: url,
+          RequestBody: body
         });
 
-        return false;
-      });
-    } else {
+        return sendHttpRequest(
+          url,
+          { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
+          JSON.stringify(body)
+        ).then(function (response) {
+          const responseStatusCode = response.statusCode;
+
+          log({
+            Name: 'DuplicateTransactionChecker',
+            Type: 'Response',
+            EventName: 'DuplicateTransactionCheckerWrite',
+            ResponseStatusCode: responseStatusCode,
+            ResponseHeaders: {},
+            ResponseBody: response.body
+          });
+
+          return false;
+        });
+      } else {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          ResponseStatusCode: responseStatusCode,
+          ResponseHeaders: {},
+          ResponseBody: response.body,
+          Message: 'Error during request to Stape Store'
+        });
+
+        return undefined;
+      }
+    })
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body,
         Message: 'Error during request to Stape Store'
       });
 
       return undefined;
-    }
-  });
+    });
 }
 
 function getStapeStoreBaseUrl(data) {
@@ -176,7 +189,7 @@ function firestoreChecker(data, documentId) {
         });
       }
     })
-    .catch(function (error) {
+    .catch(function () {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
