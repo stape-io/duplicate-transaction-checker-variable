@@ -21,26 +21,42 @@ ___TEMPLATE_PARAMETERS___
 
 [
   {
-    "type": "SELECT",
-    "name": "transactionId",
-    "displayName": "Transaction ID",
-    "macrosInSelect": true,
-    "selectItems": [
+    "type": "GROUP",
+    "name": "configGroup",
+    "displayName": "",
+    "groupStyle": "NO_ZIPPY",
+    "subParams": [
       {
-        "value": "",
-        "displayValue": "Event Data -\u003e transaction_id"
+        "type": "SELECT",
+        "name": "transactionId",
+        "displayName": "Transaction ID",
+        "macrosInSelect": true,
+        "selectItems": [
+          {
+            "value": "",
+            "displayValue": "Event Data -\u003e transaction_id"
+          }
+        ],
+        "simpleValueType": true,
+        "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\nNote: When using Stape.io for storage, any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape API requirements."
+      },
+      {
+        "type": "CHECKBOX",
+        "name": "stape",
+        "checkboxText": "I use Stape.io",
+        "simpleValueType": true,
+        "help": "In case you don\u0027t use Stape.io you need to use Firebase for storing transactions.",
+        "defaultValue": true
+      },
+      {
+        "type": "CHECKBOX",
+        "name": "addPrefix",
+        "checkboxText": "Use Client Name prefix.",
+        "simpleValueType": true,
+        "help": "Enable this option to add a prefix to the transaction_id registered in the database.\u003c/br\u003e \u003c/br\u003e\nUse this option in case you have multiple clients firing the same conversion and you want to be able to differ transaction IDs across Clients in your database. \u003c/br\u003e \u003c/br\u003e\nUse wisely since this will create a single transactionID for each client handling the conversion.",
+        "defaultValue": true
       }
-    ],
-    "simpleValueType": true,
-    "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\nNote: When using Stape.io for storage, any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape API requirements."
-  },
-  {
-    "type": "CHECKBOX",
-    "name": "stape",
-    "checkboxText": "I use Stape.io",
-    "simpleValueType": true,
-    "help": "In case you don\u0027t use Stape.io you need to use Firebase for storing transactions.",
-    "defaultValue": true
+    ]
   },
   {
     "displayName": "Firebase Settings",
@@ -975,4 +991,5 @@ Created on 7/23/2024, 1:55:47 PM
 
 2026-04-10
 changeNotes: Add prefix checkbox, fix Firestore code and add tests.
+
 

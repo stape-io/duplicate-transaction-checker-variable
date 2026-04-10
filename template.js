@@ -1,4 +1,4 @@
-/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
+// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
 const BigQuery = require('BigQuery');
 const getClientName = require('getClientName');
