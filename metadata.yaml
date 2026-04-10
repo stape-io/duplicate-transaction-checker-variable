@@ -1,7 +1,7 @@
 homepage: 'https://stape.io/'
 documentation: 'https://github.com/stape-io/duplicate-transaction-checker-variable'
 versions:
-  - sha: d6323ab471d23efd45ed34e58ec17f9e8d7e7314
+  - sha: ed5103d92d6376d964de3cf28182cc5d0bce3f37
     changeNotes: Add prefix support, fix Firestore code and add tests.
   - sha: b491f19b49005ec08527e99915727dce0ab7b4f1
     changeNotes: Auto-remove unsupported characters from Transaction ID when using Stape.
