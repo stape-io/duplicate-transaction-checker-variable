@@ -29,26 +29,42 @@ ___TEMPLATE_PARAMETERS___
 
 [
   {
-    "type": "SELECT",
-    "name": "transactionId",
-    "displayName": "Transaction ID",
-    "macrosInSelect": true,
-    "selectItems": [
+    "type": "GROUP",
+    "name": "configGroup",
+    "displayName": "",
+    "groupStyle": "NO_ZIPPY",
+    "subParams": [
       {
-        "value": "",
-        "displayValue": "Event Data -\u003e transaction_id"
+        "type": "SELECT",
+        "name": "transactionId",
+        "displayName": "Transaction ID",
+        "macrosInSelect": true,
+        "selectItems": [
+          {
+            "value": "",
+            "displayValue": "Event Data -\u003e transaction_id"
+          }
+        ],
+        "simpleValueType": true,
+        "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\n\u003cb\u003eNote:\u003c/b\u003e Any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape Store  and Firestore requirements."
+      },
+      {
+        "type": "CHECKBOX",
+        "name": "stape",
+        "checkboxText": "I use Stape.io",
+        "simpleValueType": true,
+        "help": "In case you don\u0027t use Stape.io you need to use Firebase for storing transactions.",
+        "defaultValue": true
+      },
+      {
+        "type": "CHECKBOX",
+        "name": "addPrefix",
+        "checkboxText": "Use Client Name prefix.",
+        "simpleValueType": true,
+        "help": "Enable this option to add a prefix to the transaction_id registered in the database.\u003c/br\u003e \u003c/br\u003e\nUse this option in case you have multiple clients firing the same conversion and you want to be able to differ transaction IDs across Clients in your database. \u003c/br\u003e \u003c/br\u003e\nUse wisely since this will create a single transactionID for each client handling the conversion.",
+        "defaultValue": false
       }
-    ],
-    "simpleValueType": true,
-    "help": "Select the variable containing your Transaction ID. If left blank, the system will automatically look for the \"transaction_id\" key within the Event Data.\n\u003cbr/\u003e\u003cbr/\u003e\nNote: When using Stape.io for storage, any characters in the Transaction ID that do not match the permitted set (a-zA-Z0-9_$%@+\u003d./-) will be removed to comply with Stape API requirements."
-  },
-  {
-    "type": "CHECKBOX",
-    "name": "stape",
-    "checkboxText": "I use Stape.io",
-    "simpleValueType": true,
-    "help": "In case you don\u0027t use Stape.io you need to use Firebase for storing transactions.",
-    "defaultValue": true
+    ]
   },
   {
     "displayName": "Firebase Settings",
@@ -250,6 +266,7 @@ ___SANDBOXED_JS_FOR_SERVER___
 /// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
 const BigQuery = require('BigQuery');
+const getClientName = require('getClientName');
 const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
 const Firestore = require('Firestore');
@@ -266,10 +283,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId || getEventData('transaction_id');
-if (data.stape && transactionId) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-}
+const clientName = getClientName() || 'UNKNOWN_CLIENT';
+let transactionId = data.transactionId || getEventData('transaction_id') || '';
+const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
+const firebaseProjectId = data.firebaseProjectId;
 
 if (!transactionId) {
   log({
@@ -278,25 +295,27 @@ if (!transactionId) {
     EventName: 'Error',
     Message: 'Transaction id is empty'
   });
-
   return false;
 }
 
-const documentId = generateDocumentId(transactionId);
+transactionId = transactionPrefix + transactionId;
+
+const stapeStoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+const firestoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=.-]', '');
+
+const stapeStoreDocumentId = 'duplicate-' + makeString(stapeStoreTransactionId);
+const firestoreDocumentId = 'duplicate-' + makeString(firestoreTransactionId);
+const firestorePath = data.firebasePath + '/' + firestoreDocumentId;
 
 if (data.stape) {
-  return stapeChecker(data, documentId, transactionId);
+  return stapeChecker(data, stapeStoreDocumentId, stapeStoreTransactionId);
 } else {
-  return firestoreChecker(data, documentId);
+  return firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId);
 }
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
-
-function generateDocumentId(transactionId) {
-  return 'duplicate-' + makeString(transactionId);
-}
 
 function stapeChecker(data, documentId, transactionId) {
   const url = getStapeStoreDocumentUrl(data, documentId);
@@ -310,7 +329,7 @@ function stapeChecker(data, documentId, transactionId) {
   });
 
   return sendHttpRequest(url, { method: 'GET' })
-    .then(function (response) {
+    .then((response) => {
       const responseStatusCode = response.statusCode;
 
       log({
@@ -340,7 +359,7 @@ function stapeChecker(data, documentId, transactionId) {
           url,
           { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
           JSON.stringify(body)
-        ).then(function (response) {
+        ).then((response) => {
           const responseStatusCode = response.statusCode;
 
           log({
@@ -368,14 +387,14 @@ function stapeChecker(data, documentId, transactionId) {
         return undefined;
       }
     })
-    .catch(function () {
+    .catch(function (exception) {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
-        Message: 'Error during request to Stape Store'
+        Message: 'Error during request to Stape Store',
+        Reason: JSON.stringify(exception)
       });
-
       return undefined;
     });
 }
@@ -421,33 +440,48 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreChecker(data, documentId) {
-  const projectId = data.firebaseProjectId;
-  const documentPath = data.firebasePath + '/' + documentId;
+function firestoreResponseHandler(result) {
+  if (result && result.id && !result.reason) return true;
+  else return false;
+}
 
-  return Firestore.read(documentPath, { projectId: projectId })
-    .then(function (result) {
-      if (result.exists) {
-        return true;
-      } else {
-        return Firestore.write(documentPath, {
-          projectId: projectId,
-          data: { transaction_id: documentId }
-        }).then(function () {
-          return false;
+function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId) {
+  if (rejection.reason === 'not_found') {
+    const firestoreOptions = {
+      projectId: firebaseProjectId,
+      data: { transaction_id: firestoreTransactionId }
+    };
+    return Firestore.write(firestorePath, firestoreOptions)
+      .then(() => false)
+      .catch((error) => {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          Message: 'Error writing to Firestore',
+          Reason: error.reason,
+          Body: JSON.stringify(error)
         });
-      }
-    })
-    .catch(function () {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Message',
-        EventName: 'Error',
-        Message: 'Error writing to Firestore'
       });
-
-      return undefined;
+  } else {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      EventName: 'Error',
+      Message: 'Error reading from Firestore',
+      Reason: rejection.reason,
+      Body: JSON.stringify(rejection)
     });
+    return undefined;
+  }
+  return undefined;
+}
+
+function firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId) {
+  return Firestore.read(firestorePath, { projectId: firebaseProjectId }).then(
+    (response) => firestoreResponseHandler(response),
+    (rejection) => firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId)
+  );
 }
 
 /*==============================================================================
@@ -465,7 +499,8 @@ function isUIFieldTrue(field) {
 }
 
 function enc(data) {
-  return encodeUriComponent(makeString(data || ''));
+  if (['null', 'undefined'].indexOf(getType(data)) !== -1) data = '';
+  return encodeUriComponent(makeString(data));
 }
 
 function log(rawDataToLog) {
@@ -882,11 +917,109 @@ ___SERVER_PERMISSIONS___
 
 ___TESTS___
 
-scenarios: []
+scenarios:
+- name: Stape Checker - New Transaction (With Prefix)
+  code: "const mockData = {\n  stape: true,\n  addPrefix: true,\n  transactionId:\
+    \ 'TID-12345',\n  stapeStoreCollectionName: 'default'\n};\n\nmock('getClientName',\
+    \ () => 'Custom Data Client'); // Has spaces!\nmock('getEventData', () => undefined);\n\
+    \nmock('sendHttpRequest', (url, options, body) => {\n  if (options.method ===\
+    \ 'GET') {\n    assertThat(url).contains('duplicate-CustomDataClient_TID-12345');\n\
+    \    return Promise.create((resolve) => resolve({ statusCode: 404, body: '' }));\n\
+    \  } \n  \n  if (options.method === 'PUT') {\n    const parsedBody = JSON.parse(body);\n\
+    \    assertThat(parsedBody.transaction_id).isEqualTo('CustomDataClient_TID-12345');\n\
+    \    return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));\n\
+    \  }\n});\n\nrunCode(mockData).then((result) => {\n  assertThat(result).isFalse();\n\
+    });"
+- name: Stape Checker - Duplicate Transaction Found (No Prefix)
+  code: |-
+    const mockData = {
+      stape: true,
+      addPrefix: false,
+      transactionId: 'TID-123456',
+      stapeStoreCollectionName: 'default'
+    };
+
+    mock('getClientName', () => 'Client1');
+    mock('getEventData', () => undefined);
+
+    mock('sendHttpRequest', (url, options) => {
+      if (options.method === 'GET') {
+        assertThat(url).contains('duplicate-TID-123456');
+        return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Firestore Checker - New Transaction (With Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addPrefix: true,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-StoreClient_TID-12345-FS');
+        return Promise.create((resolve, reject) => reject({ reason: 'not_found' }));
+      },
+      write: (path, data) => {
+        assertThat(data.data.transaction_id).isEqualTo('StoreClient_TID-12345-FS');
+        return Promise.create((resolve) => resolve({ id: 'success_id' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isFalse();
+    });
+- name: Firestore Checker - Duplicate Transaction (No Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addPrefix: false,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-TID-12345-FS');
+        return Promise.create((resolve, reject) => resolve({ id: 'FOUND' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Empty Transaction ID Guard Clause
+  code: "const mockData = {\n  stape: true,\n  addPrefix: true, \n  transactionId:\
+    \ ''\n};\n\nmock('getClientName', () => 'Client');\nmock('getEventData', () =>\
+    \ undefined);\n\nconst result = runCode(mockData);\n\nassertThat(result).isFalse();\n\
+    assertApi('sendHttpRequest').wasNotCalled();"
+setup: "const Promise = require('Promise');\nconst JSON = require('JSON');\n\nmock('getRequestHeader',\
+  \ () => 'test-header');\nmock('getContainerVersion', () => ({ debugMode: true }));\n\
+  mock('getTimestampMillis', () => 1000000000000);\nmock('logToConsole', () => {});\n\
+  mock('BigQuery', { insert: () => {} });\nmock('sendHttpRequest', (url, options,\
+  \ body) => {\n return Promise.create((resolve) => resolve({ \n        statusCode:\
+  \ 200, headers: {}, body: '' \n    }));\n});"
 
 
 ___NOTES___
 
 Created on 7/23/2024, 1:55:47 PM
+
+2026-04-10
+changeNotes: Add prefix checkbox, fix Firestore code and add tests.
 
 

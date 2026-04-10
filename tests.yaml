@@ -1,0 +1,141 @@
+setup: |-
+  const Promise = require('Promise');
+  const JSON = require('JSON');
+
+  mock('getRequestHeader', () => 'test-header');
+  mock('getContainerVersion', () => ({ debugMode: true }));
+  mock('getTimestampMillis', () => 1000000000000);
+  mock('logToConsole', () => {});
+  mock('BigQuery', { insert: () => {} });
+
+  mock('sendHttpRequest', (url, options, body) => {
+    return Promise.create((resolve) =>
+      resolve({
+        statusCode: 200,
+        headers: {},
+        body: ''
+      })
+    );
+  });
+
+scenarios:
+  - name: Stape Checker - New Transaction (With Prefix)
+    code: |-
+      const mockData = {
+        stape: true,
+        addPrefix: true,
+        transactionId: 'TID-12345',
+        stapeStoreCollectionName: 'default'
+      };
+
+      mock('getClientName', () => 'Custom Data Client');
+      // Has spaces!
+      mock('getEventData', () => undefined);
+
+      mock('sendHttpRequest', (url, options, body) => {
+        if (options.method === 'GET') {
+          assertThat(url).contains('duplicate-CustomDataClient_TID-12345');
+          return Promise.create((resolve) => resolve({ statusCode: 404, body: '' }));
+        }
+
+        if (options.method === 'PUT') {
+          const parsedBody = JSON.parse(body);
+          assertThat(parsedBody.transaction_id).isEqualTo('CustomDataClient_TID-12345');
+          return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));
+        }
+      });
+
+      runCode(mockData).then((result) => {
+        assertThat(result).isFalse();
+      });
+
+  - name: Stape Checker - Duplicate Transaction Found (No Prefix)
+    code: |-
+      const mockData = {
+        stape: true,
+        addPrefix: false,
+        transactionId: 'TID-123456',
+        stapeStoreCollectionName: 'default'
+      };
+
+      mock('getClientName', () => 'Client1');
+      mock('getEventData', () => undefined);
+
+      mock('sendHttpRequest', (url, options) => {
+        if (options.method === 'GET') {
+          assertThat(url).contains('duplicate-TID-123456');
+          return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));
+        }
+      });
+
+      runCode(mockData).then((result) => {
+        assertThat(result).isTrue();
+      });
+
+  - name: Firestore Checker - New Transaction (With Prefix)
+    code: |-
+      const mockData = {
+        stape: false,
+        addPrefix: true,
+        transactionId: 'TID-12345-FS',
+        firebaseProjectId: 'my-project',
+        firebasePath: 'firestore_path'
+      };
+
+      mock('getClientName', () => 'Store Client');
+      mock('getEventData', () => undefined);
+
+      mockObject('Firestore', {
+        read: (path) => {
+          assertThat(path).isEqualTo('firestore_path/duplicate-StoreClient_TID-12345-FS');
+          return Promise.create((resolve, reject) => reject({ reason: 'not_found' }));
+        },
+        write: (path, data) => {
+          assertThat(data.data.transaction_id).isEqualTo('StoreClient_TID-12345-FS');
+          return Promise.create((resolve) => resolve({ id: 'success_id' }));
+        }
+      });
+
+      runCode(mockData).then((result) => {
+        assertThat(result).isFalse();
+      });
+
+  - name: Firestore Checker - Duplicate Transaction (No Prefix)
+    code: |-
+      const mockData = {
+        stape: false,
+        addPrefix: false,
+        transactionId: 'TID-12345-FS',
+        firebaseProjectId: 'my-project',
+        firebasePath: 'firestore_path'
+      };
+
+      mock('getClientName', () => 'Store Client');
+      mock('getEventData', () => undefined);
+
+      mockObject('Firestore', {
+        read: (path) => {
+          assertThat(path).isEqualTo('firestore_path/duplicate-TID-12345-FS');
+          return Promise.create((resolve, reject) => resolve({ id: 'FOUND' }));
+        }
+      });
+
+      runCode(mockData).then((result) => {
+        assertThat(result).isTrue();
+      });
+
+  - name: Empty Transaction ID Guard Clause
+    code: |-
+      const mockData = {
+        stape: true,
+        addPrefix: true,
+        transactionId: ''
+      };
+
+      mock('getClientName', () => 'Client');
+      mock('getEventData', () => undefined);
+
+      const result = runCode(mockData);
+
+      assertThat(result).isFalse();
+      assertApi('sendHttpRequest').wasNotCalled();
