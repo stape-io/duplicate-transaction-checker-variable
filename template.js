@@ -1,6 +1,7 @@
 /// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
 const BigQuery = require('BigQuery');
+const getClientName = require('getClientName');
 const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
 const Firestore = require('Firestore');
@@ -17,10 +18,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId || getEventData('transaction_id');
-if (data.stape && transactionId) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-}
+const clientName = getClientName();
+let transactionId = data.transactionId || getEventData('transaction_id') || '';
+const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
+const projectId = data.firebaseProjectId;
 
 if (!transactionId) {
   log({
@@ -29,25 +30,24 @@ if (!transactionId) {
     EventName: 'Error',
     Message: 'Transaction id is empty'
   });
-
-  return false;
+  return undefined;
 }
 
-const documentId = generateDocumentId(transactionId);
+transactionId = transactionPrefix + transactionId;
+transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+
+const documentId = 'duplicate-' + makeString(transactionId);
+const firestorePathArgument = data.firebasePath + '/' + documentId;
 
 if (data.stape) {
   return stapeChecker(data, documentId, transactionId);
 } else {
-  return firestoreChecker(data, documentId);
+  return firestoreChecker(firestorePathArgument);
 }
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
-
-function generateDocumentId(transactionId) {
-  return 'duplicate-' + makeString(transactionId);
-}
 
 function stapeChecker(data, documentId, transactionId) {
   const url = getStapeStoreDocumentUrl(data, documentId);
@@ -60,75 +60,64 @@ function stapeChecker(data, documentId, transactionId) {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' })
-    .then(function (response) {
-      const responseStatusCode = response.statusCode;
+  return sendHttpRequest(url, { method: 'GET' }).then((response) => {
+    const responseStatusCode = response.statusCode;
+
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Response',
+      EventName: 'DuplicateTransactionCheckerGet',
+      ResponseStatusCode: responseStatusCode,
+      ResponseHeaders: {},
+      ResponseBody: response.body
+    });
+
+    if (responseStatusCode == 200) {
+      return true;
+    } else if (responseStatusCode == 404) {
+      const body = { transaction_id: transactionId };
 
       log({
         Name: 'DuplicateTransactionChecker',
-        Type: 'Response',
-        EventName: 'DuplicateTransactionCheckerGet',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body
+        Type: 'Request',
+        EventName: 'DuplicateTransactionCheckerWrite',
+        RequestMethod: 'PUT',
+        RequestUrl: url,
+        RequestBody: body
       });
 
-      if (responseStatusCode === 200) {
-        return true;
-      } else if (responseStatusCode === 404) {
-        const body = { transaction_id: transactionId };
+      return sendHttpRequest(
+        url,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
+        JSON.stringify(body)
+      ).then((response) => {
+        const responseStatusCode = response.statusCode;
 
         log({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Request',
+          Type: 'Response',
           EventName: 'DuplicateTransactionCheckerWrite',
-          RequestMethod: 'PUT',
-          RequestUrl: url,
-          RequestBody: body
-        });
-
-        return sendHttpRequest(
-          url,
-          { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-          JSON.stringify(body)
-        ).then(function (response) {
-          const responseStatusCode = response.statusCode;
-
-          log({
-            Name: 'DuplicateTransactionChecker',
-            Type: 'Response',
-            EventName: 'DuplicateTransactionCheckerWrite',
-            ResponseStatusCode: responseStatusCode,
-            ResponseHeaders: {},
-            ResponseBody: response.body
-          });
-
-          return false;
-        });
-      } else {
-        log({
-          Name: 'DuplicateTransactionChecker',
-          Type: 'Message',
-          EventName: 'Error',
           ResponseStatusCode: responseStatusCode,
           ResponseHeaders: {},
-          ResponseBody: response.body,
-          Message: 'Error during request to Stape Store'
+          ResponseBody: response.body
         });
 
-        return undefined;
-      }
-    })
-    .catch(function () {
+        return false;
+      });
+    } else {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
+        ResponseStatusCode: responseStatusCode,
+        ResponseHeaders: {},
+        ResponseBody: response.body,
         Message: 'Error during request to Stape Store'
       });
 
       return undefined;
-    });
+    }
+  });
 }
 
 function getStapeStoreBaseUrl(data) {
@@ -172,33 +161,40 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreChecker(data, documentId) {
-  const projectId = data.firebaseProjectId;
-  const documentPath = data.firebasePath + '/' + documentId;
+function firestoreResponseHandler(result) {
+  if (result.id && result.reason !== 'not_found' && result.reason !== 'invalid_argument')
+    return true;
+  else return false;
+}
 
-  return Firestore.read(documentPath, { projectId: projectId })
-    .then(function (result) {
-      if (result.exists) {
-        return true;
-      } else {
-        return Firestore.write(documentPath, {
-          projectId: projectId,
-          data: { transaction_id: documentId }
-        }).then(function () {
-          return false;
+function firestoreRejectionHandler(reject) {
+  const firestoreOptions = {
+    projectId: projectId,
+    data: { transaction_id: transactionId }
+  };
+
+  if (reject.reason === 'not_found') {
+    return Firestore.write(firestorePathArgument, firestoreOptions)
+      .then(() => false)
+      .catch((error) => {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          Message: 'Error reading or writing to Firestore',
+          Reason: error.reason,
+          Body: JSON.stringify(error)
         });
-      }
-    })
-    .catch(function () {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Message',
-        EventName: 'Error',
-        Message: 'Error writing to Firestore'
       });
+  }
+  return undefined;
+}
 
-      return undefined;
-    });
+function firestoreChecker(firestorePathArgument) {
+  return Firestore.read(firestorePathArgument, { projectId: projectId }).then(
+    firestoreResponseHandler,
+    firestoreRejectionHandler
+  );
 }
 
 /*==============================================================================
@@ -216,7 +212,8 @@ function isUIFieldTrue(field) {
 }
 
 function enc(data) {
-  return encodeUriComponent(makeString(data || ''));
+  if (['null', 'undefined'].indexOf(getType(data)) !== -1) data = '';
+  return encodeUriComponent(makeString(data));
 }
 
 function log(rawDataToLog) {

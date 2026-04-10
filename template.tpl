@@ -1,12 +1,4 @@
-﻿___TERMS_OF_SERVICE___
-
-By creating or modifying this file you agree to Google Tag Manager's Community
-Template Gallery Developer Terms of Service available at
-https://developers.google.com/tag-manager/gallery-tos (or such other URL as
-Google may provide), as modified from time to time.
-
-
-___INFO___
+﻿___INFO___
 
 {
   "type": "MACRO",
@@ -250,6 +242,7 @@ ___SANDBOXED_JS_FOR_SERVER___
 /// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
 const BigQuery = require('BigQuery');
+const getClientName = require('getClientName');
 const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
 const Firestore = require('Firestore');
@@ -266,10 +259,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId || getEventData('transaction_id');
-if (data.stape && transactionId) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-}
+const clientName = getClientName();
+let transactionId = data.transactionId || getEventData('transaction_id') || '';
+const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
+const projectId = data.firebaseProjectId;
 
 if (!transactionId) {
   log({
@@ -278,25 +271,24 @@ if (!transactionId) {
     EventName: 'Error',
     Message: 'Transaction id is empty'
   });
-
-  return false;
+  return undefined;
 }
 
-const documentId = generateDocumentId(transactionId);
+transactionId = transactionPrefix + transactionId;
+transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+
+const documentId = 'duplicate-' + makeString(transactionId);
+const firestorePathArgument = data.firebasePath + '/' + documentId;
 
 if (data.stape) {
   return stapeChecker(data, documentId, transactionId);
 } else {
-  return firestoreChecker(data, documentId);
+  return firestoreChecker(firestorePathArgument);
 }
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
-
-function generateDocumentId(transactionId) {
-  return 'duplicate-' + makeString(transactionId);
-}
 
 function stapeChecker(data, documentId, transactionId) {
   const url = getStapeStoreDocumentUrl(data, documentId);
@@ -309,75 +301,64 @@ function stapeChecker(data, documentId, transactionId) {
     RequestUrl: url
   });
 
-  return sendHttpRequest(url, { method: 'GET' })
-    .then(function (response) {
-      const responseStatusCode = response.statusCode;
+  return sendHttpRequest(url, { method: 'GET' }).then((response) => {
+    const responseStatusCode = response.statusCode;
+
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Response',
+      EventName: 'DuplicateTransactionCheckerGet',
+      ResponseStatusCode: responseStatusCode,
+      ResponseHeaders: {},
+      ResponseBody: response.body
+    });
+
+    if (responseStatusCode == 200) {
+      return true;
+    } else if (responseStatusCode == 404) {
+      const body = { transaction_id: transactionId };
 
       log({
         Name: 'DuplicateTransactionChecker',
-        Type: 'Response',
-        EventName: 'DuplicateTransactionCheckerGet',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body
+        Type: 'Request',
+        EventName: 'DuplicateTransactionCheckerWrite',
+        RequestMethod: 'PUT',
+        RequestUrl: url,
+        RequestBody: body
       });
 
-      if (responseStatusCode === 200) {
-        return true;
-      } else if (responseStatusCode === 404) {
-        const body = { transaction_id: transactionId };
+      return sendHttpRequest(
+        url,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
+        JSON.stringify(body)
+      ).then((response) => {
+        const responseStatusCode = response.statusCode;
 
         log({
           Name: 'DuplicateTransactionChecker',
-          Type: 'Request',
+          Type: 'Response',
           EventName: 'DuplicateTransactionCheckerWrite',
-          RequestMethod: 'PUT',
-          RequestUrl: url,
-          RequestBody: body
-        });
-
-        return sendHttpRequest(
-          url,
-          { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
-          JSON.stringify(body)
-        ).then(function (response) {
-          const responseStatusCode = response.statusCode;
-
-          log({
-            Name: 'DuplicateTransactionChecker',
-            Type: 'Response',
-            EventName: 'DuplicateTransactionCheckerWrite',
-            ResponseStatusCode: responseStatusCode,
-            ResponseHeaders: {},
-            ResponseBody: response.body
-          });
-
-          return false;
-        });
-      } else {
-        log({
-          Name: 'DuplicateTransactionChecker',
-          Type: 'Message',
-          EventName: 'Error',
           ResponseStatusCode: responseStatusCode,
           ResponseHeaders: {},
-          ResponseBody: response.body,
-          Message: 'Error during request to Stape Store'
+          ResponseBody: response.body
         });
 
-        return undefined;
-      }
-    })
-    .catch(function () {
+        return false;
+      });
+    } else {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
+        ResponseStatusCode: responseStatusCode,
+        ResponseHeaders: {},
+        ResponseBody: response.body,
         Message: 'Error during request to Stape Store'
       });
 
       return undefined;
-    });
+    }
+  });
 }
 
 function getStapeStoreBaseUrl(data) {
@@ -421,33 +402,40 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreChecker(data, documentId) {
-  const projectId = data.firebaseProjectId;
-  const documentPath = data.firebasePath + '/' + documentId;
+function firestoreResponseHandler(result) {
+  if (result.id && result.reason !== 'not_found' && result.reason !== 'invalid_argument')
+    return true;
+  else return false;
+}
 
-  return Firestore.read(documentPath, { projectId: projectId })
-    .then(function (result) {
-      if (result.exists) {
-        return true;
-      } else {
-        return Firestore.write(documentPath, {
-          projectId: projectId,
-          data: { transaction_id: documentId }
-        }).then(function () {
-          return false;
+function firestoreRejectionHandler(reject) {
+  const firestoreOptions = {
+    projectId: projectId,
+    data: { transaction_id: transactionId }
+  };
+
+  if (reject.reason === 'not_found') {
+    return Firestore.write(firestorePathArgument, firestoreOptions)
+      .then(() => false)
+      .catch((error) => {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          Message: 'Error reading or writing to Firestore',
+          Reason: error.reason,
+          Body: JSON.stringify(error)
         });
-      }
-    })
-    .catch(function () {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Message',
-        EventName: 'Error',
-        Message: 'Error writing to Firestore'
       });
+  }
+  return undefined;
+}
 
-      return undefined;
-    });
+function firestoreChecker(firestorePathArgument) {
+  return Firestore.read(firestorePathArgument, { projectId: projectId }).then(
+    firestoreResponseHandler,
+    firestoreRejectionHandler
+  );
 }
 
 /*==============================================================================
@@ -465,7 +453,8 @@ function isUIFieldTrue(field) {
 }
 
 function enc(data) {
-  return encodeUriComponent(makeString(data || ''));
+  if (['null', 'undefined'].indexOf(getType(data)) !== -1) data = '';
+  return encodeUriComponent(makeString(data));
 }
 
 function log(rawDataToLog) {
@@ -882,11 +871,108 @@ ___SERVER_PERMISSIONS___
 
 ___TESTS___
 
-scenarios: []
+scenarios:
+- name: Stape Checker - New Transaction (With Prefix)
+  code: "const mockData = {\n  stape: true,\n  addPrefix: true,\n  transactionId:\
+    \ 'TID-12345',\n  stapeStoreCollectionName: 'default'\n};\n\nmock('getClientName',\
+    \ () => 'Custom Data Client'); // Has spaces!\nmock('getEventData', () => undefined);\n\
+    \nmock('sendHttpRequest', (url, options, body) => {\n  if (options.method ===\
+    \ 'GET') {\n    assertThat(url).contains('duplicate-CustomDataClient_TID-12345');\n\
+    \    return Promise.create((resolve) => resolve({ statusCode: 404, body: '' }));\n\
+    \  } \n  \n  if (options.method === 'PUT') {\n    const parsedBody = JSON.parse(body);\n\
+    \    assertThat(parsedBody.transaction_id).isEqualTo('CustomDataClient_TID-12345');\n\
+    \    return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));\n\
+    \  }\n});\n\nrunCode(mockData).then((result) => {\n  assertThat(result).isFalse();\n\
+    });"
+- name: Stape Checker - Duplicate Transaction Found (No Prefix)
+  code: |-
+    const mockData = {
+      stape: true,
+      addPrefix: false,
+      transactionId: 'TID-123456',
+      stapeStoreCollectionName: 'default'
+    };
+
+    mock('getClientName', () => 'Client1');
+    mock('getEventData', () => undefined);
+
+    mock('sendHttpRequest', (url, options) => {
+      if (options.method === 'GET') {
+        assertThat(url).contains('duplicate-TID-123456');
+        return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Firestore Checker - New Transaction (With Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addPrefix: true,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-StoreClient_TID-12345-FS');
+        return Promise.create((resolve, reject) => reject({ reason: 'not_found' }));
+      },
+      write: (path, data) => {
+        assertThat(data.data.transaction_id).isEqualTo('StoreClient_TID-12345-FS');
+        return Promise.create((resolve) => resolve({ id: 'success_id' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isFalse();
+    });
+- name: Firestore Checker - Duplicate Transaction (No Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addPrefix: false,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-TID-12345-FS');
+        return Promise.create((resolve, reject) => resolve({ id: 'FOUND' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Empty Transaction ID Guard Clause
+  code: "const mockData = {\n  stape: true,\n  addPrefix: true, \n  transactionId:\
+    \ ''\n};\n\nmock('getClientName', () => 'Client');\nmock('getEventData', () =>\
+    \ undefined);\n\nconst result = runCode(mockData);\n\nassertThat(result).isUndefined();\n\
+    assertApi('sendHttpRequest').wasNotCalled();"
+setup: "const Promise = require('Promise');\nconst JSON = require('JSON');\n\nmock('getRequestHeader',\
+  \ () => 'test-header');\nmock('getContainerVersion', () => ({ debugMode: true }));\n\
+  mock('getTimestampMillis', () => 1000000000000);\nmock('logToConsole', () => {});\n\
+  mock('BigQuery', { insert: () => {} });\nmock('sendHttpRequest', (url, options,\
+  \ body) => {\n return Promise.create((resolve) => resolve({ \n        statusCode:\
+  \ 200, headers: {}, body: '' \n    }));\n});"
 
 
 ___NOTES___
 
 Created on 7/23/2024, 1:55:47 PM
 
+2026-04-10
+changeNotes: Add prefix checkbox, fix Firestore code and add tests.
 
