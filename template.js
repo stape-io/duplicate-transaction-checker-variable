@@ -1,4 +1,4 @@
-// <reference path="./server-gtm-sandboxed-apis.d.ts" />
+/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
 
 const BigQuery = require('BigQuery');
 const getClientName = require('getClientName');
@@ -34,7 +34,7 @@ if (!transactionId) {
 }
 
 transactionId = transactionPrefix + transactionId;
-transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=.\/-]', '');
+transactionId = replaceAll(makeString(transactionId), makeString('[^a-zA-Z0-9_$%@+=\\.-]'), '');
 
 const documentId = 'duplicate-' + makeString(transactionId);
 const firestorePathArgument = data.firebasePath + '/' + documentId;
@@ -173,8 +173,7 @@ function getStapeStoreDocumentUrl(data, documentId) {
 }
 
 function firestoreResponseHandler(result) {
-  if (result.id && result.reason !== 'not_found' && result.reason !== 'invalid_argument')
-    return true;
+  if (result && result.id && !result.reason) return true;
   else return false;
 }
 
@@ -184,7 +183,7 @@ function firestoreRejectionHandler(rejection, firestorePathArgument) {
     data: { transaction_id: transactionId }
   };
 
-  if (rejection.reason === 'not_found') {
+  if (rejection.reason === 'not_found' || rejection.reason === 'invalid_argument') {
     return Firestore.write(firestorePathArgument, firestoreOptions)
       .then(() => false)
       .catch((error) => {
