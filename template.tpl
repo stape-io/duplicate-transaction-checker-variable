@@ -283,10 +283,10 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-const clientName = getClientName();
+const clientName = getClientName() || 'UNKNOWN_CLIENT';
 let transactionId = data.transactionId || getEventData('transaction_id') || '';
 const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
-const projectId = data.firebaseProjectId;
+const firebaseProjectId = data.firebaseProjectId;
 
 if (!transactionId) {
   log({
@@ -299,15 +299,18 @@ if (!transactionId) {
 }
 
 transactionId = transactionPrefix + transactionId;
-transactionId = replaceAll(makeString(transactionId), makeString('[^a-zA-Z0-9_$%@+=\\.-]'), '');
 
-const documentId = 'duplicate-' + makeString(transactionId);
-const firestorePathArgument = data.firebasePath + '/' + documentId;
+const stapeStoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
+const firestoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=.-]', '');
+
+const stapeStoreDocumentId = 'duplicate-' + makeString(stapeStoreTransactionId);
+const firestoreDocumentId = 'duplicate-' + makeString(firestoreTransactionId);
+const firestorePath = data.firebasePath + '/' + firestoreDocumentId;
 
 if (data.stape) {
-  return stapeChecker(data, documentId, transactionId);
+  return stapeChecker(data, stapeStoreDocumentId, stapeStoreTransactionId);
 } else {
-  return firestoreChecker(firestorePathArgument);
+  return firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId);
 }
 
 /*==============================================================================
@@ -442,14 +445,13 @@ function firestoreResponseHandler(result) {
   else return false;
 }
 
-function firestoreRejectionHandler(rejection, firestorePathArgument) {
-  const firestoreOptions = {
-    projectId: projectId,
-    data: { transaction_id: transactionId }
-  };
-
-  if (rejection.reason === 'not_found' || rejection.reason === 'invalid_argument') {
-    return Firestore.write(firestorePathArgument, firestoreOptions)
+function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId) {
+  if (rejection.reason === 'not_found') {
+    const firestoreOptions = {
+      projectId: firebaseProjectId,
+      data: { transaction_id: firestoreTransactionId }
+    };
+    return Firestore.write(firestorePath, firestoreOptions)
       .then(() => false)
       .catch((error) => {
         log({
@@ -470,14 +472,15 @@ function firestoreRejectionHandler(rejection, firestorePathArgument) {
       Reason: rejection.reason,
       Body: JSON.stringify(rejection)
     });
+    return undefined;
   }
   return undefined;
 }
 
-function firestoreChecker(firestorePathArgument) {
-  return Firestore.read(firestorePathArgument, { projectId: projectId }).then(
+function firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId) {
+  return Firestore.read(firestorePath, { projectId: firebaseProjectId }).then(
     (response) => firestoreResponseHandler(response),
-    (rejection) => firestoreRejectionHandler(rejection, firestorePathArgument)
+    (rejection) => firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId)
   );
 }
 
