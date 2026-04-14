@@ -137,5 +137,5 @@ scenarios:
 
       const result = runCode(mockData);
 
-      assertThat(result).isUndefined();
+      assertThat(result).isFalse();
       assertApi('sendHttpRequest').wasNotCalled();
