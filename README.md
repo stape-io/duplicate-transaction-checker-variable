@@ -17,3 +17,6 @@ The **Duplicate Transaction Checker Variable** is designed to detect and block t
 Initial development was done by [Lars Friis](https://www.linkedin.com/in/lars-friis/).
 
 The **Duplicate Transaction Checker Variable** for GTM Server Side is developed and maintained by [Stape Team](https://stape.io/) under the Apache 2.0 license.
+
+### GTM Gallery Status
+🟢 [Listed](https://tagmanager.google.com/gallery/#/owners/stape-io/templates/duplicate-transaction-checker-variable)
