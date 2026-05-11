@@ -31,8 +31,6 @@ ___TEMPLATE_PARAMETERS___
   {
     "type": "GROUP",
     "name": "configGroup",
-    "displayName": "",
-    "groupStyle": "NO_ZIPPY",
     "subParams": [
       {
         "type": "SELECT",
@@ -58,10 +56,10 @@ ___TEMPLATE_PARAMETERS___
       },
       {
         "type": "CHECKBOX",
-        "name": "addPrefix",
-        "checkboxText": "Use Client Name prefix.",
+        "name": "addClientNameToTransactionId",
+        "checkboxText": "Use Client Name as prefix of Transaction ID",
         "simpleValueType": true,
-        "help": "Enable this option to add a prefix to the transaction_id registered in the database.\u003c/br\u003e \u003c/br\u003e\nUse this option in case you have multiple clients firing the same conversion and you want to be able to differ transaction IDs across Clients in your database. \u003c/br\u003e \u003c/br\u003e\nUse wisely since this will create a single transactionID for each client handling the conversion.",
+        "help": "Enable this option to add the name of the Client that claimed the request as a prefix to the Transaction ID registered in the database.\n\u003c/br\u003e\u003c/br\u003e\nUse this option in case you have multiple Clients receiving the same Transaction ID from different requests (e.g. GA4 Client and Data Client) and you want to be able to run logic in sGTM without considering the transaction to be duplicated for different Clients. \n\u003c/br\u003e\u003c/br\u003e\nUse wisely since this will create a single Transaction ID for each Client handling the conversion.",
         "defaultValue": false
       }
     ]
@@ -76,20 +74,21 @@ ___TEMPLATE_PARAMETERS___
         "type": "TEXT",
         "name": "firebaseProjectId",
         "displayName": "Firebase Project ID",
-        "simpleValueType": true
+        "simpleValueType": true,
+        "help": "Optional. \n\u003cbr/\u003e\u003cbr/\u003e\nThe Google Cloud Platform project ID. \n\u003cbr/\u003e\nIf omitted, the Project ID is retrieved from the environment variable \u003ci\u003eGOOGLE_CLOUD_PROJECT\u003c/i\u003e as long as the \u003ci\u003eaccess_firestore\u003c/i\u003e permission setting for the project ID is set to * or \u003ci\u003eGOOGLE_CLOUD_PROJECT\u003c/i\u003e.\n\u003cbr/\u003e\nIf the server container is running on Google Cloud, \u003ci\u003eGOOGLE_CLOUD_PROJECT\u003c/i\u003e will already be set to the Google Cloud project\u0027s ID."
       },
       {
         "type": "TEXT",
         "name": "firebasePath",
-        "displayName": "Firebase Path",
+        "displayName": "Firebase Collection",
         "simpleValueType": true,
-        "help": "The variable uses Firebase to store data. You can choose any key for a document that will store the data values.",
+        "help": "The path to the collection in Firebase where the data will be stored.\n\u003cbr/\u003e\nEach Transaction ID will be stored in a document named: \"duplicate-{Transaction ID}\".\n\u003cbr/\u003e\n\u003cbr/\u003e\nThe Firebase integration supports only Firestore in \u003cb\u003eNative mode\u003c/b\u003e, not Firestore in Datastore mode. \n\u003cbr/\u003e\nAlso, it only supports using the \u003cb\u003e(default) database\u003c/b\u003e.",
         "valueValidators": [
           {
             "type": "NON_EMPTY"
           }
         ],
-        "defaultValue": "stape/duplicate"
+        "defaultValue": "stape"
       }
     ],
     "enablingConditions": [
@@ -263,8 +262,6 @@ ___TEMPLATE_PARAMETERS___
 
 ___SANDBOXED_JS_FOR_SERVER___
 
-/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
-
 const BigQuery = require('BigQuery');
 const getClientName = require('getClientName');
 const createRegex = require('createRegex');
@@ -283,34 +280,51 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-const clientName = getClientName() || 'UNKNOWN_CLIENT';
 let transactionId = data.transactionId || getEventData('transaction_id') || '';
-const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
-const firebaseProjectId = data.firebaseProjectId;
+transactionId = replaceAll(
+  makeString(transactionId),
+  data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+  ''
+);
 
 if (!transactionId) {
   log({
     Name: 'DuplicateTransactionChecker',
     Type: 'Message',
     EventName: 'Error',
-    Message: 'Transaction id is empty'
+    Message: 'Transaction ID is invalid'
   });
   return false;
 }
 
-transactionId = transactionPrefix + transactionId;
+let documentIdPrefix = 'duplicate-';
+if (data.addClientNameToTransactionId) {
+  let clientName = makeString(getClientName() || '');
+  clientName = replaceAll(
+    makeString(clientName),
+    data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+    ''
+  );
 
-const stapeStoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-const firestoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=.-]', '');
+  if (!clientName) {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      EventName: 'Error',
+      Message: 'Client Name ID is invalid'
+    });
+    return false;
+  }
 
-const stapeStoreDocumentId = 'duplicate-' + makeString(stapeStoreTransactionId);
-const firestoreDocumentId = 'duplicate-' + makeString(firestoreTransactionId);
-const firestorePath = data.firebasePath + '/' + firestoreDocumentId;
+  documentIdPrefix += clientName + '_';
+}
+
+const documentId = documentIdPrefix + makeString(transactionId);
 
 if (data.stape) {
-  return stapeChecker(data, stapeStoreDocumentId, stapeStoreTransactionId);
+  return stapeChecker(data, documentId, transactionId);
 } else {
-  return firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId);
+  return firestoreChecker(data, documentId, transactionId);
 }
 
 /*==============================================================================
@@ -387,7 +401,7 @@ function stapeChecker(data, documentId, transactionId) {
         return undefined;
       }
     })
-    .catch(function (exception) {
+    .catch((exception) => {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
@@ -440,18 +454,15 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreResponseHandler(result) {
+function firestoreSuccessHandler(result) {
   if (result && result.id && !result.reason) return true;
   else return false;
 }
 
-function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId) {
-  if (rejection.reason === 'not_found') {
-    const firestoreOptions = {
-      projectId: firebaseProjectId,
-      data: { transaction_id: firestoreTransactionId }
-    };
-    return Firestore.write(firestorePath, firestoreOptions)
+function firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId) {
+  if (result.reason === 'not_found') {
+    const inputData = { transaction_id: transactionId };
+    return Firestore.write(firestorePath, inputData, firestoreOptions)
       .then(() => false)
       .catch((error) => {
         log({
@@ -459,9 +470,9 @@ function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactio
           Type: 'Message',
           EventName: 'Error',
           Message: 'Error writing to Firestore',
-          Reason: error.reason,
-          Body: JSON.stringify(error)
+          Reason: JSON.stringify(error)
         });
+        return undefined;
       });
   } else {
     log({
@@ -469,18 +480,19 @@ function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactio
       Type: 'Message',
       EventName: 'Error',
       Message: 'Error reading from Firestore',
-      Reason: rejection.reason,
-      Body: JSON.stringify(rejection)
+      Reason: JSON.stringify(result)
     });
     return undefined;
   }
-  return undefined;
 }
 
-function firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId) {
-  return Firestore.read(firestorePath, { projectId: firebaseProjectId }).then(
-    (response) => firestoreResponseHandler(response),
-    (rejection) => firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId)
+function firestoreChecker(data, documentId, transactionId) {
+  const firestorePath = data.firebasePath + '/' + documentId;
+  const firestoreOptions = { projectId: data.firebaseProjectId };
+
+  return Firestore.read(firestorePath, firestoreOptions).then(
+    (result) => firestoreSuccessHandler(result),
+    (result) => firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId)
   );
 }
 
@@ -919,16 +931,16 @@ ___TESTS___
 
 scenarios:
 - name: Stape Checker - New Transaction (With Prefix)
-  code: "const mockData = {\n  stape: true,\n  addPrefix: true,\n  transactionId:\
-    \ 'TID-12345',\n  stapeStoreCollectionName: 'default'\n};\n\nmock('getClientName',\
-    \ () => 'Custom Data Client'); // Has spaces!\nmock('getEventData', () => undefined);\n\
-    \nmock('sendHttpRequest', (url, options, body) => {\n  if (options.method ===\
-    \ 'GET') {\n    assertThat(url).contains('duplicate-CustomDataClient_TID-12345');\n\
+  code: "const mockData = {\n  stape: true,\n  addClientNameToTransactionId: true,\n\
+    \  transactionId: 'TID-12345',\n  stapeStoreCollectionName: 'default'\n};\n\n\
+    mock('getClientName', () => 'Custom Data Client'); // Has spaces!\nmock('getEventData',\
+    \ () => undefined);\n\nmock('sendHttpRequest', (url, options, body) => {\n  if\
+    \ (options.method === 'GET') {\n    assertThat(url).contains('duplicate-CustomDataClient_TID-12345');\n\
     \    return Promise.create((resolve) => resolve({ statusCode: 404, body: '' }));\n\
     \  } \n  \n  if (options.method === 'PUT') {\n    const parsedBody = JSON.parse(body);\n\
-    \    assertThat(parsedBody.transaction_id).isEqualTo('CustomDataClient_TID-12345');\n\
-    \    return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));\n\
-    \  }\n});\n\nrunCode(mockData).then((result) => {\n  assertThat(result).isFalse();\n\
+    \    assertThat(parsedBody.transaction_id).isEqualTo('TID-12345');\n    return\
+    \ Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));\n  }\n\
+    });\n\nrunCode(mockData).then((result) => {\n  assertThat(result).isFalse();\n\
     });"
 - name: Stape Checker - Duplicate Transaction Found (No Prefix)
   code: |-
@@ -956,7 +968,7 @@ scenarios:
   code: |-
     const mockData = {
       stape: false,
-      addPrefix: true,
+      addClientNameToTransactionId: true,
       transactionId: 'TID-12345-FS',
       firebaseProjectId: 'my-project',
       firebasePath: 'firestore_path'
@@ -971,7 +983,7 @@ scenarios:
         return Promise.create((resolve, reject) => reject({ reason: 'not_found' }));
       },
       write: (path, data) => {
-        assertThat(data.data.transaction_id).isEqualTo('StoreClient_TID-12345-FS');
+        assertThat(data.transaction_id).isEqualTo('TID-12345-FS');
         return Promise.create((resolve) => resolve({ id: 'success_id' }));
       }
     });
@@ -1007,19 +1019,23 @@ scenarios:
     \ ''\n};\n\nmock('getClientName', () => 'Client');\nmock('getEventData', () =>\
     \ undefined);\n\nconst result = runCode(mockData);\n\nassertThat(result).isFalse();\n\
     assertApi('sendHttpRequest').wasNotCalled();"
-setup: "const Promise = require('Promise');\nconst JSON = require('JSON');\n\nmock('getRequestHeader',\
-  \ () => 'test-header');\nmock('getContainerVersion', () => ({ debugMode: true }));\n\
-  mock('getTimestampMillis', () => 1000000000000);\nmock('logToConsole', () => {});\n\
-  mock('BigQuery', { insert: () => {} });\nmock('sendHttpRequest', (url, options,\
-  \ body) => {\n return Promise.create((resolve) => resolve({ \n        statusCode:\
-  \ 200, headers: {}, body: '' \n    }));\n});"
+setup: |-
+  const Promise = require('Promise');
+  const JSON = require('JSON');
+
+  mock('getRequestHeader', () => 'test-header');
+  mock('getContainerVersion', () => ({ debugMode: true }));
+  mock('getTimestampMillis', () => 1000000000000);
+  mock('BigQuery', { insert: () => {} });
+  mock('sendHttpRequest', (url, options, body) => {
+   return Promise.create((resolve) => resolve({ statusCode: 200, headers: {}, body: '' }));
+  });
 
 
 ___NOTES___
 
+2026-05-11 - Change Notes:
+  - Add prefix checkbox, fix Firestore code and add tests.
+
 Created on 7/23/2024, 1:55:47 PM
-
-2026-04-10
-changeNotes: Add prefix checkbox, fix Firestore code and add tests.
-
 

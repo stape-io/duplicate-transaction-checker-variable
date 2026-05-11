@@ -1,5 +1,3 @@
-/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
-
 const BigQuery = require('BigQuery');
 const getClientName = require('getClientName');
 const createRegex = require('createRegex');
@@ -18,34 +16,51 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-const clientName = getClientName() || 'UNKNOWN_CLIENT';
 let transactionId = data.transactionId || getEventData('transaction_id') || '';
-const transactionPrefix = data.addPrefix ? makeString(clientName) + '_' : '';
-const firebaseProjectId = data.firebaseProjectId;
+transactionId = replaceAll(
+  makeString(transactionId),
+  data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+  ''
+);
 
 if (!transactionId) {
   log({
     Name: 'DuplicateTransactionChecker',
     Type: 'Message',
     EventName: 'Error',
-    Message: 'Transaction id is empty'
+    Message: 'Transaction ID is invalid'
   });
   return false;
 }
 
-transactionId = transactionPrefix + transactionId;
+let documentIdPrefix = 'duplicate-';
+if (data.addClientNameToTransactionId) {
+  let clientName = makeString(getClientName() || '');
+  clientName = replaceAll(
+    makeString(clientName),
+    data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+    ''
+  );
 
-const stapeStoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-const firestoreTransactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=.-]', '');
+  if (!clientName) {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      EventName: 'Error',
+      Message: 'Client Name ID is invalid'
+    });
+    return false;
+  }
 
-const stapeStoreDocumentId = 'duplicate-' + makeString(stapeStoreTransactionId);
-const firestoreDocumentId = 'duplicate-' + makeString(firestoreTransactionId);
-const firestorePath = data.firebasePath + '/' + firestoreDocumentId;
+  documentIdPrefix += clientName + '_';
+}
+
+const documentId = documentIdPrefix + makeString(transactionId);
 
 if (data.stape) {
-  return stapeChecker(data, stapeStoreDocumentId, stapeStoreTransactionId);
+  return stapeChecker(data, documentId, transactionId);
 } else {
-  return firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId);
+  return firestoreChecker(data, documentId, transactionId);
 }
 
 /*==============================================================================
@@ -122,7 +137,7 @@ function stapeChecker(data, documentId, transactionId) {
         return undefined;
       }
     })
-    .catch(function (exception) {
+    .catch((exception) => {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
@@ -175,18 +190,15 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreResponseHandler(result) {
+function firestoreSuccessHandler(result) {
   if (result && result.id && !result.reason) return true;
   else return false;
 }
 
-function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId) {
-  if (rejection.reason === 'not_found') {
-    const firestoreOptions = {
-      projectId: firebaseProjectId,
-      data: { transaction_id: firestoreTransactionId }
-    };
-    return Firestore.write(firestorePath, firestoreOptions)
+function firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId) {
+  if (result.reason === 'not_found') {
+    const inputData = { transaction_id: transactionId };
+    return Firestore.write(firestorePath, inputData, firestoreOptions)
       .then(() => false)
       .catch((error) => {
         log({
@@ -194,9 +206,9 @@ function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactio
           Type: 'Message',
           EventName: 'Error',
           Message: 'Error writing to Firestore',
-          Reason: error.reason,
-          Body: JSON.stringify(error)
+          Reason: JSON.stringify(error)
         });
+        return undefined;
       });
   } else {
     log({
@@ -204,18 +216,19 @@ function firestoreRejectionHandler(rejection, firestorePath, firestoreTransactio
       Type: 'Message',
       EventName: 'Error',
       Message: 'Error reading from Firestore',
-      Reason: rejection.reason,
-      Body: JSON.stringify(rejection)
+      Reason: JSON.stringify(result)
     });
     return undefined;
   }
-  return undefined;
 }
 
-function firestoreChecker(firestorePath, firebaseProjectId, firestoreTransactionId) {
-  return Firestore.read(firestorePath, { projectId: firebaseProjectId }).then(
-    (response) => firestoreResponseHandler(response),
-    (rejection) => firestoreRejectionHandler(rejection, firestorePath, firestoreTransactionId)
+function firestoreChecker(data, documentId, transactionId) {
+  const firestorePath = data.firebasePath + '/' + documentId;
+  const firestoreOptions = { projectId: data.firebaseProjectId };
+
+  return Firestore.read(firestorePath, firestoreOptions).then(
+    (result) => firestoreSuccessHandler(result),
+    (result) => firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId)
   );
 }
 
