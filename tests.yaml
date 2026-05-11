@@ -1,0 +1,101 @@
+scenarios:
+- name: Stape Checker - New Transaction (With Prefix)
+  code: "const mockData = {\n  stape: true,\n  addClientNameToTransactionId: true,\n\
+    \  transactionId: 'TID-12345',\n  stapeStoreCollectionName: 'default'\n};\n\n\
+    mock('getClientName', () => 'Custom Data Client'); // Has spaces!\nmock('getEventData',\
+    \ () => undefined);\n\nmock('sendHttpRequest', (url, options, body) => {\n  if\
+    \ (options.method === 'GET') {\n    assertThat(url).contains('duplicate-CustomDataClient_TID-12345');\n\
+    \    return Promise.create((resolve) => resolve({ statusCode: 404, body: '' }));\n\
+    \  } \n  \n  if (options.method === 'PUT') {\n    const parsedBody = JSON.parse(body);\n\
+    \    assertThat(parsedBody.transaction_id).isEqualTo('TID-12345');\n    return\
+    \ Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));\n  }\n\
+    });\n\nrunCode(mockData).then((result) => {\n  assertThat(result).isFalse();\n\
+    });"
+- name: Stape Checker - Duplicate Transaction Found (No Prefix)
+  code: |-
+    const mockData = {
+      stape: true,
+      addPrefix: false,
+      transactionId: 'TID-123456',
+      stapeStoreCollectionName: 'default'
+    };
+
+    mock('getClientName', () => 'Client1');
+    mock('getEventData', () => undefined);
+
+    mock('sendHttpRequest', (url, options) => {
+      if (options.method === 'GET') {
+        assertThat(url).contains('duplicate-TID-123456');
+        return Promise.create((resolve) => resolve({ statusCode: 200, body: '' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Firestore Checker - New Transaction (With Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addClientNameToTransactionId: true,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-StoreClient_TID-12345-FS');
+        return Promise.create((resolve, reject) => reject({ reason: 'not_found' }));
+      },
+      write: (path, data) => {
+        assertThat(data.transaction_id).isEqualTo('TID-12345-FS');
+        return Promise.create((resolve) => resolve({ id: 'success_id' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isFalse();
+    });
+- name: Firestore Checker - Duplicate Transaction (No Prefix)
+  code: |-
+    const mockData = {
+      stape: false,
+      addPrefix: false,
+      transactionId: 'TID-12345-FS',
+      firebaseProjectId: 'my-project',
+      firebasePath: 'firestore_path'
+    };
+
+    mock('getClientName', () => 'Store Client');
+    mock('getEventData', () => undefined);
+
+    mockObject('Firestore', {
+      read: (path) => {
+        assertThat(path).isEqualTo('firestore_path/duplicate-TID-12345-FS');
+        return Promise.create((resolve, reject) => resolve({ id: 'FOUND' }));
+      }
+    });
+
+    runCode(mockData).then((result) => {
+      assertThat(result).isTrue();
+    });
+- name: Empty Transaction ID Guard Clause
+  code: "const mockData = {\n  stape: true,\n  addPrefix: true, \n  transactionId:\
+    \ ''\n};\n\nmock('getClientName', () => 'Client');\nmock('getEventData', () =>\
+    \ undefined);\n\nconst result = runCode(mockData);\n\nassertThat(result).isFalse();\n\
+    assertApi('sendHttpRequest').wasNotCalled();"
+setup: |-
+  const Promise = require('Promise');
+  const JSON = require('JSON');
+
+  mock('getRequestHeader', () => 'test-header');
+  mock('getContainerVersion', () => ({ debugMode: true }));
+  mock('getTimestampMillis', () => 1000000000000);
+  mock('BigQuery', { insert: () => {} });
+  mock('sendHttpRequest', (url, options, body) => {
+   return Promise.create((resolve) => resolve({ statusCode: 200, headers: {}, body: '' }));
+  });

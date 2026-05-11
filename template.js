@@ -1,6 +1,5 @@
-/// <reference path="./server-gtm-sandboxed-apis.d.ts" />
-
 const BigQuery = require('BigQuery');
+const getClientName = require('getClientName');
 const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
 const Firestore = require('Firestore');
@@ -17,37 +16,56 @@ const sendHttpRequest = require('sendHttpRequest');
 /*==============================================================================
 ==============================================================================*/
 
-let transactionId = data.transactionId || getEventData('transaction_id');
-if (data.stape && transactionId) {
-  transactionId = replaceAll(makeString(transactionId), '[^a-zA-Z0-9_$%@+=./-]', '');
-}
+let transactionId = data.transactionId || getEventData('transaction_id') || '';
+transactionId = replaceAll(
+  makeString(transactionId),
+  data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+  ''
+);
 
 if (!transactionId) {
   log({
     Name: 'DuplicateTransactionChecker',
     Type: 'Message',
     EventName: 'Error',
-    Message: 'Transaction id is empty'
+    Message: 'Transaction ID is invalid'
   });
-
   return false;
 }
 
-const documentId = generateDocumentId(transactionId);
+let documentIdPrefix = 'duplicate-';
+if (data.addClientNameToTransactionId) {
+  let clientName = makeString(getClientName() || '');
+  clientName = replaceAll(
+    makeString(clientName),
+    data.stape ? '[^a-zA-Z0-9_$%@+=./-]' : '[^a-zA-Z0-9_$%@+=.-]',
+    ''
+  );
+
+  if (!clientName) {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      EventName: 'Error',
+      Message: 'Client Name ID is invalid'
+    });
+    return false;
+  }
+
+  documentIdPrefix += clientName + '_';
+}
+
+const documentId = documentIdPrefix + makeString(transactionId);
 
 if (data.stape) {
   return stapeChecker(data, documentId, transactionId);
 } else {
-  return firestoreChecker(data, documentId);
+  return firestoreChecker(data, documentId, transactionId);
 }
 
 /*==============================================================================
   Vendor related functions
 ==============================================================================*/
-
-function generateDocumentId(transactionId) {
-  return 'duplicate-' + makeString(transactionId);
-}
 
 function stapeChecker(data, documentId, transactionId) {
   const url = getStapeStoreDocumentUrl(data, documentId);
@@ -61,7 +79,7 @@ function stapeChecker(data, documentId, transactionId) {
   });
 
   return sendHttpRequest(url, { method: 'GET' })
-    .then(function (response) {
+    .then((response) => {
       const responseStatusCode = response.statusCode;
 
       log({
@@ -91,7 +109,7 @@ function stapeChecker(data, documentId, transactionId) {
           url,
           { method: 'PUT', headers: { 'Content-Type': 'application/json' } },
           JSON.stringify(body)
-        ).then(function (response) {
+        ).then((response) => {
           const responseStatusCode = response.statusCode;
 
           log({
@@ -119,14 +137,14 @@ function stapeChecker(data, documentId, transactionId) {
         return undefined;
       }
     })
-    .catch(function () {
+    .catch((exception) => {
       log({
         Name: 'DuplicateTransactionChecker',
         Type: 'Message',
         EventName: 'Error',
-        Message: 'Error during request to Stape Store'
+        Message: 'Error during request to Stape Store',
+        Reason: JSON.stringify(exception)
       });
-
       return undefined;
     });
 }
@@ -172,33 +190,46 @@ function getStapeStoreDocumentUrl(data, documentId) {
   return storeBaseUrl + '/' + enc(documentId);
 }
 
-function firestoreChecker(data, documentId) {
-  const projectId = data.firebaseProjectId;
-  const documentPath = data.firebasePath + '/' + documentId;
+function firestoreSuccessHandler(result) {
+  if (result && result.id && !result.reason) return true;
+  else return false;
+}
 
-  return Firestore.read(documentPath, { projectId: projectId })
-    .then(function (result) {
-      if (result.exists) {
-        return true;
-      } else {
-        return Firestore.write(documentPath, {
-          projectId: projectId,
-          data: { transaction_id: documentId }
-        }).then(function () {
-          return false;
+function firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId) {
+  if (result.reason === 'not_found') {
+    const inputData = { transaction_id: transactionId };
+    return Firestore.write(firestorePath, inputData, firestoreOptions)
+      .then(() => false)
+      .catch((error) => {
+        log({
+          Name: 'DuplicateTransactionChecker',
+          Type: 'Message',
+          EventName: 'Error',
+          Message: 'Error writing to Firestore',
+          Reason: JSON.stringify(error)
         });
-      }
-    })
-    .catch(function () {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Message',
-        EventName: 'Error',
-        Message: 'Error writing to Firestore'
+        return undefined;
       });
-
-      return undefined;
+  } else {
+    log({
+      Name: 'DuplicateTransactionChecker',
+      Type: 'Message',
+      EventName: 'Error',
+      Message: 'Error reading from Firestore',
+      Reason: JSON.stringify(result)
     });
+    return undefined;
+  }
+}
+
+function firestoreChecker(data, documentId, transactionId) {
+  const firestorePath = data.firebasePath + '/' + documentId;
+  const firestoreOptions = { projectId: data.firebaseProjectId };
+
+  return Firestore.read(firestorePath, firestoreOptions).then(
+    (result) => firestoreSuccessHandler(result),
+    (result) => firestoreRejectionHandler(result, firestoreOptions, firestorePath, transactionId)
+  );
 }
 
 /*==============================================================================
@@ -216,7 +247,8 @@ function isUIFieldTrue(field) {
 }
 
 function enc(data) {
-  return encodeUriComponent(makeString(data || ''));
+  if (['null', 'undefined'].indexOf(getType(data)) !== -1) data = '';
+  return encodeUriComponent(makeString(data));
 }
 
 function log(rawDataToLog) {
