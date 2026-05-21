@@ -161,116 +161,18 @@ ___TEMPLATE_PARAMETERS___
         "type": "EQUALS"
       }
     ]
-  },
-  {
-    "displayName": "Logs Settings",
-    "name": "logsGroup",
-    "groupStyle": "ZIPPY_CLOSED",
-    "type": "GROUP",
-    "subParams": [
-      {
-        "type": "RADIO",
-        "name": "logType",
-        "radioItems": [
-          {
-            "value": "no",
-            "displayValue": "Do not log"
-          },
-          {
-            "value": "debug",
-            "displayValue": "Log to console during debug and preview"
-          },
-          {
-            "value": "always",
-            "displayValue": "Always log to console"
-          }
-        ],
-        "simpleValueType": true,
-        "defaultValue": "debug"
-      }
-    ]
-  },
-  {
-    "displayName": "BigQuery Logs Settings",
-    "name": "bigQueryLogsGroup",
-    "groupStyle": "ZIPPY_CLOSED",
-    "type": "GROUP",
-    "subParams": [
-      {
-        "type": "RADIO",
-        "name": "bigQueryLogType",
-        "radioItems": [
-          {
-            "value": "no",
-            "displayValue": "Do not log to BigQuery"
-          },
-          {
-            "value": "always",
-            "displayValue": "Log to BigQuery"
-          }
-        ],
-        "simpleValueType": true,
-        "defaultValue": "no"
-      },
-      {
-        "type": "GROUP",
-        "name": "logsBigQueryConfigGroup",
-        "groupStyle": "NO_ZIPPY",
-        "subParams": [
-          {
-            "type": "TEXT",
-            "name": "logBigQueryProjectId",
-            "displayName": "BigQuery Project ID",
-            "simpleValueType": true,
-            "help": "Optional.  \u003cbr/\u003e\u003cbr/\u003e  If omitted, it will be retrieved from the environment variable \u003cI\u003eGOOGLE_CLOUD_PROJECT\u003c/i\u003e where the server container is running. If the server container is running on Google Cloud, \u003cI\u003eGOOGLE_CLOUD_PROJECT\u003c/i\u003e will already be set to the Google Cloud project\u0027s ID."
-          },
-          {
-            "type": "TEXT",
-            "name": "logBigQueryDatasetId",
-            "displayName": "BigQuery Dataset ID",
-            "simpleValueType": true,
-            "valueValidators": [
-              {
-                "type": "NON_EMPTY"
-              }
-            ]
-          },
-          {
-            "type": "TEXT",
-            "name": "logBigQueryTableId",
-            "displayName": "BigQuery Table ID",
-            "simpleValueType": true,
-            "valueValidators": [
-              {
-                "type": "NON_EMPTY"
-              }
-            ]
-          }
-        ],
-        "enablingConditions": [
-          {
-            "paramName": "bigQueryLogType",
-            "paramValue": "always",
-            "type": "EQUALS"
-          }
-        ]
-      }
-    ]
   }
 ]
 
 
 ___SANDBOXED_JS_FOR_SERVER___
 
-const BigQuery = require('BigQuery');
 const getClientName = require('getClientName');
 const createRegex = require('createRegex');
 const encodeUriComponent = require('encodeUriComponent');
 const Firestore = require('Firestore');
-const getContainerVersion = require('getContainerVersion');
 const getEventData = require('getEventData');
 const getRequestHeader = require('getRequestHeader');
-const getTimestampMillis = require('getTimestampMillis');
 const getType = require('getType');
 const JSON = require('JSON');
 const logToConsole = require('logToConsole');
@@ -291,7 +193,7 @@ if (!transactionId) {
   log({
     Name: 'DuplicateTransactionChecker',
     Type: 'Message',
-    EventName: 'Error',
+    EventName: '🛑 [ERROR]',
     Message: 'Transaction ID is invalid'
   });
   return false;
@@ -310,7 +212,7 @@ if (data.addClientNameToTransactionId) {
     log({
       Name: 'DuplicateTransactionChecker',
       Type: 'Message',
-      EventName: 'Error',
+      EventName: '🛑 [ERROR]',
       Message: 'Client Name ID is invalid'
     });
     return false;
@@ -334,40 +236,14 @@ if (data.stape) {
 function stapeChecker(data, documentId, transactionId) {
   const url = getStapeStoreDocumentUrl(data, documentId);
 
-  log({
-    Name: 'DuplicateTransactionChecker',
-    Type: 'Request',
-    EventName: 'DuplicateTransactionCheckerGet',
-    RequestMethod: 'GET',
-    RequestUrl: url
-  });
-
   return sendHttpRequest(url, { method: 'GET' })
     .then((response) => {
       const responseStatusCode = response.statusCode;
-
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Response',
-        EventName: 'DuplicateTransactionCheckerGet',
-        ResponseStatusCode: responseStatusCode,
-        ResponseHeaders: {},
-        ResponseBody: response.body
-      });
 
       if (responseStatusCode === 200) {
         return true;
       } else if (responseStatusCode === 404) {
         const body = { transaction_id: transactionId };
-
-        log({
-          Name: 'DuplicateTransactionChecker',
-          Type: 'Request',
-          EventName: 'DuplicateTransactionCheckerWrite',
-          RequestMethod: 'PUT',
-          RequestUrl: url,
-          RequestBody: body
-        });
 
         return sendHttpRequest(
           url,
@@ -375,40 +251,13 @@ function stapeChecker(data, documentId, transactionId) {
           JSON.stringify(body)
         ).then((response) => {
           const responseStatusCode = response.statusCode;
-
-          log({
-            Name: 'DuplicateTransactionChecker',
-            Type: 'Response',
-            EventName: 'DuplicateTransactionCheckerWrite',
-            ResponseStatusCode: responseStatusCode,
-            ResponseHeaders: {},
-            ResponseBody: response.body
-          });
-
           return false;
         });
       } else {
-        log({
-          Name: 'DuplicateTransactionChecker',
-          Type: 'Message',
-          EventName: 'Error',
-          ResponseStatusCode: responseStatusCode,
-          ResponseHeaders: {},
-          ResponseBody: response.body,
-          Message: 'Error during request to Stape Store'
-        });
-
         return undefined;
       }
     })
     .catch((exception) => {
-      log({
-        Name: 'DuplicateTransactionChecker',
-        Type: 'Message',
-        EventName: 'Error',
-        Message: 'Error during request to Stape Store',
-        Reason: JSON.stringify(exception)
-      });
       return undefined;
     });
 }
@@ -465,23 +314,9 @@ function firestoreRejectionHandler(result, firestoreOptions, firestorePath, tran
     return Firestore.write(firestorePath, inputData, firestoreOptions)
       .then(() => false)
       .catch((error) => {
-        log({
-          Name: 'DuplicateTransactionChecker',
-          Type: 'Message',
-          EventName: 'Error',
-          Message: 'Error writing to Firestore',
-          Reason: JSON.stringify(error)
-        });
         return undefined;
       });
   } else {
-    log({
-      Name: 'DuplicateTransactionChecker',
-      Type: 'Message',
-      EventName: 'Error',
-      Message: 'Error reading from Firestore',
-      Reason: JSON.stringify(result)
-    });
     return undefined;
   }
 }
@@ -516,91 +351,8 @@ function enc(data) {
 }
 
 function log(rawDataToLog) {
-  const logDestinationsHandlers = {};
-  if (determinateIsLoggingEnabled()) logDestinationsHandlers.console = logConsole;
-  if (determinateIsLoggingEnabledForBigQuery()) logDestinationsHandlers.bigQuery = logToBigQuery;
-
   rawDataToLog.TraceId = getRequestHeader('trace-id');
-
-  const keyMappings = {
-    // No transformation for Console is needed.
-    bigQuery: {
-      Name: 'tag_name',
-      Type: 'type',
-      TraceId: 'trace_id',
-      EventName: 'event_name',
-      RequestMethod: 'request_method',
-      RequestUrl: 'request_url',
-      RequestBody: 'request_body',
-      ResponseStatusCode: 'response_status_code',
-      ResponseHeaders: 'response_headers',
-      ResponseBody: 'response_body'
-    }
-  };
-
-  for (const logDestination in logDestinationsHandlers) {
-    const handler = logDestinationsHandlers[logDestination];
-    if (!handler) continue;
-
-    const mapping = keyMappings[logDestination];
-    const dataToLog = mapping ? {} : rawDataToLog;
-
-    if (mapping) {
-      for (const key in rawDataToLog) {
-        const mappedKey = mapping[key] || key;
-        dataToLog[mappedKey] = rawDataToLog[key];
-      }
-    }
-
-    handler(dataToLog);
-  }
-}
-
-function logConsole(dataToLog) {
-  logToConsole(JSON.stringify(dataToLog));
-}
-
-function logToBigQuery(dataToLog) {
-  const connectionInfo = {
-    projectId: data.logBigQueryProjectId,
-    datasetId: data.logBigQueryDatasetId,
-    tableId: data.logBigQueryTableId
-  };
-
-  dataToLog.timestamp = getTimestampMillis();
-
-  ['request_body', 'response_headers', 'response_body'].forEach((p) => {
-    dataToLog[p] = JSON.stringify(dataToLog[p]);
-  });
-
-  BigQuery.insert(connectionInfo, [dataToLog], { ignoreUnknownValues: true });
-}
-
-function determinateIsLoggingEnabled() {
-  const containerVersion = getContainerVersion();
-  const isDebug = !!(
-    containerVersion &&
-    (containerVersion.debugMode || containerVersion.previewMode)
-  );
-
-  if (!data.logType) {
-    return isDebug;
-  }
-
-  if (data.logType === 'no') {
-    return false;
-  }
-
-  if (data.logType === 'debug') {
-    return isDebug;
-  }
-
-  return data.logType === 'always';
-}
-
-function determinateIsLoggingEnabledForBigQuery() {
-  if (data.bigQueryLogType === 'no') return false;
-  return data.bigQueryLogType === 'always';
+  logToConsole(JSON.stringify(rawDataToLog));
 }
 
 
@@ -862,67 +614,6 @@ ___SERVER_PERMISSIONS___
       "isEditedByUser": true
     },
     "isRequired": true
-  },
-  {
-    "instance": {
-      "key": {
-        "publicId": "access_bigquery",
-        "versionId": "1"
-      },
-      "param": [
-        {
-          "key": "allowedTables",
-          "value": {
-            "type": 2,
-            "listItem": [
-              {
-                "type": 3,
-                "mapKey": [
-                  {
-                    "type": 1,
-                    "string": "projectId"
-                  },
-                  {
-                    "type": 1,
-                    "string": "datasetId"
-                  },
-                  {
-                    "type": 1,
-                    "string": "tableId"
-                  },
-                  {
-                    "type": 1,
-                    "string": "operation"
-                  }
-                ],
-                "mapValue": [
-                  {
-                    "type": 1,
-                    "string": "*"
-                  },
-                  {
-                    "type": 1,
-                    "string": "*"
-                  },
-                  {
-                    "type": 1,
-                    "string": "*"
-                  },
-                  {
-                    "type": 1,
-                    "string": "write"
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    },
-    "clientAnnotations": {
-      "isEditedByUser": true
-    },
-    "isRequired": true
   }
 ]
 
@@ -1033,6 +724,9 @@ setup: |-
 
 
 ___NOTES___
+
+2026-05-21 Change Notes:
+ - Console and BigQuery logging removal.
 
 2026-05-11 - Change Notes:
   - Add prefix checkbox, fix Firestore code and add tests.
