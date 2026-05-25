@@ -1,6 +1,8 @@
 homepage: 'https://stape.io/'
 documentation: 'https://github.com/stape-io/duplicate-transaction-checker-variable'
 versions:
+  - sha: 7bf76690f6a4d7a4f7060c710855433322ce562c
+    changeNotes: Console and BigQuery logging removal.
   - sha: d6d3ae401fedaded00d02645e3e6fb522830949b
     changeNotes: Add prefix support, fix Firestore code and add tests.
   - sha: b491f19b49005ec08527e99915727dce0ab7b4f1
